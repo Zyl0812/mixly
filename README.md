@@ -24,10 +24,6 @@
 irm https://raw.githubusercontent.com/Zyl0812/mixly/main/install.ps1 | iex
 ```
 
-就这一条。脚本会下载预编译好的 `mixly.exe` 到 `%LOCALAPPDATA%\Programs\mixly`，写进用户 `PATH`，
-并在你没装 [mpv](https://mpv.io/) 时用 winget / scoop 自动装上。**不需要 Rust 工具链。**
-装完开一个新终端，`PATH` 才会生效。
-
 验证：
 
 ```powershell

@@ -22,10 +22,6 @@
 irm https://raw.githubusercontent.com/Zyl0812/mixly/main/install.ps1 | iex
 ```
 
-That's it. The script downloads the prebuilt `mixly.exe` into `%LOCALAPPDATA%\Programs\mixly`, adds it
-to your user `PATH`, and installs [mpv](https://mpv.io/) via winget/scoop if you don't have it.
-No Rust toolchain required. Open a new terminal afterwards so `PATH` takes effect.
-
 Verify:
 
 ```powershell
