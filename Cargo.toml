@@ -1,0 +1,43 @@
+[package]
+name = "mixly"
+version = "0.1.0"
+edition = "2021"
+description = "Lightweight CLI/TUI music player for Netease Cloud Music and QQ Music"
+license = "MIT"
+readme = "README.md"
+
+[[bin]]
+name = "mixly"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+directories = "6"
+futures-util = "0.3"
+image = { version = "0.25", default-features = false, features = ["png"] }
+interprocess = { version = "2", features = ["tokio"] }
+netease-qq-music-api = "=0.1.0"
+qrcode = { version = "0.14", default-features = false }
+ratatui = "0.29"
+reqwest = { version = "0.13", default-features = false, features = ["socks", "stream", "rustls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "process", "io-util", "sync", "fs", "signal"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util", "sync"] }
+tempfile = "3"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
