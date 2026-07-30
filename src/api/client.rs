@@ -31,11 +31,6 @@ impl ApiClient {
         }
     }
 
-    pub fn with_quality(mut self, quality: Quality) -> Self {
-        self.quality = quality;
-        self
-    }
-
     fn to_api_platform(p: Platform) -> Result<ApiPlatform> {
         match p {
             Platform::Netease => Ok(ApiPlatform::Netease),
@@ -101,11 +96,6 @@ impl ApiClient {
             return true; // 本地无需登录
         }
         matches!(self.load_token(platform), Ok(Some(_)))
-    }
-
-    /// True if neither Netease nor QQ has a saved token.
-    pub fn is_fully_logged_out(&self) -> bool {
-        !self.is_logged_in(Platform::Netease) && !self.is_logged_in(Platform::Qq)
     }
 
     pub fn save_token(&self, platform: Platform, token: &LoginToken) -> Result<()> {
@@ -338,7 +328,7 @@ impl ApiClient {
             println!("二维码数据已写入: {}", qr_path.display());
             if let Some(b64) = qr.strip_prefix("data:image/png;base64,") {
                 let png_path = self.paths.config_dir.join(format!("login_qr_{platform}.png"));
-                if let Ok(bytes) = decode_base64_approx(b64) {
+                if let Ok(bytes) = crate::qr_term::decode_base64(b64) {
                     let _ = std::fs::write(&png_path, bytes);
                     println!("PNG 图片已保存: {}", png_path.display());
                 }
@@ -370,15 +360,6 @@ impl ApiClient {
                     sleep(Duration::from_secs(2)).await;
                 }
             }
-        }
-    }
-
-    /// Referer header required by some CDN anti-leech rules.
-    pub fn referer_for(platform: Platform) -> &'static str {
-        match platform {
-            Platform::Netease => "https://music.163.com/",
-            Platform::Qq => "https://y.qq.com/",
-            Platform::Local => "",
         }
     }
 
@@ -483,36 +464,4 @@ fn quality_ladder(preferred: Quality) -> Vec<Quality> {
     }
 }
 
-/// Minimal base64 decode without extra deps (QR PNG is best-effort).
-fn decode_base64_approx(input: &str) -> Result<Vec<u8>> {
-    fn val(c: u8) -> Option<u8> {
-        match c {
-            b'A'..=b'Z' => Some(c - b'A'),
-            b'a'..=b'z' => Some(c - b'a' + 26),
-            b'0'..=b'9' => Some(c - b'0' + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
-        }
-    }
-    let cleaned: Vec<u8> = input
-        .bytes()
-        .filter(|b| !b.is_ascii_whitespace() && *b != b'=')
-        .collect();
-    let mut out = Vec::with_capacity(cleaned.len() * 3 / 4);
-    let mut i = 0;
-    while i + 3 < cleaned.len() {
-        let (a, b, c, d) = (
-            val(cleaned[i]).ok_or_else(|| anyhow!("bad b64"))?,
-            val(cleaned[i + 1]).ok_or_else(|| anyhow!("bad b64"))?,
-            val(cleaned[i + 2]).ok_or_else(|| anyhow!("bad b64"))?,
-            val(cleaned[i + 3]).ok_or_else(|| anyhow!("bad b64"))?,
-        );
-        out.push((a << 2) | (b >> 4));
-        out.push((b << 4) | (c >> 2));
-        out.push((c << 6) | d);
-        i += 4;
-    }
-    Ok(out)
-}
 

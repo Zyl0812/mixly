@@ -88,11 +88,29 @@ impl AudioRelay {
         let mut g = self.state.lock().await;
         g.current = Some(track);
     }
+}
 
-    pub async fn clear(&self) {
-        let mut g = self.state.lock().await;
-        g.current = None;
+/// CDN 反盗链要求的 Referer + 浏览器 UA（中继与预取共用）。
+pub fn cdn_headers(platform: Platform) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    let referer = match platform {
+        Platform::Netease => "https://music.163.com/",
+        Platform::Qq => "https://y.qq.com/",
+        Platform::Local => "",
+    };
+    if !referer.is_empty() {
+        headers.insert(
+            HeaderName::from_static("referer"),
+            HeaderValue::from_static(referer),
+        );
     }
+    headers.insert(
+        HeaderName::from_static("user-agent"),
+        HeaderValue::from_static(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        ),
+    );
+    headers
 }
 
 async fn handle_conn(
@@ -196,24 +214,7 @@ async fn proxy_stream(
         return serve_local_file(stream, path, range, head_only).await;
     }
 
-    let mut headers = HeaderMap::new();
-    let referer = match track.platform {
-        Platform::Netease => "https://music.163.com/",
-        Platform::Qq => "https://y.qq.com/",
-        Platform::Local => "",
-    };
-    if !referer.is_empty() {
-        headers.insert(
-            HeaderName::from_static("referer"),
-            HeaderValue::from_static(referer),
-        );
-    }
-    headers.insert(
-        HeaderName::from_static("user-agent"),
-        HeaderValue::from_static(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        ),
-    );
+    let mut headers = cdn_headers(track.platform);
     if let Some(r) = range {
         headers.insert(RANGE, HeaderValue::from_str(r).unwrap_or(HeaderValue::from_static("bytes=0-")));
     }
@@ -298,10 +299,12 @@ async fn serve_local_file(
     range: Option<&str>,
     head_only: bool,
 ) -> Result<()> {
-    let data = tokio::fs::read(path)
+    use tokio::io::AsyncSeekExt;
+
+    let mut file = tokio::fs::File::open(path)
         .await
-        .with_context(|| format!("read prefetch cache {}", path.display()))?;
-    let total = data.len() as u64;
+        .with_context(|| format!("open prefetch cache {}", path.display()))?;
+    let total = file.metadata().await?.len();
     let (status, content_range, start, length) = range_response_meta(total, range);
     if status == 416 {
         let body = b"range not satisfiable";
@@ -337,12 +340,10 @@ async fn serve_local_file(
         stream.flush().await?;
         return Ok(());
     }
-    let start = start as usize;
-    let end = (start as u64 + length) as usize;
-    let end = end.min(data.len());
-    if start < end {
-        stream.write_all(&data[start..end]).await?;
-    }
+    // 按 Range 流式发送，避免把整个音频文件读进内存
+    file.seek(std::io::SeekFrom::Start(start)).await?;
+    let mut limited = file.take(length);
+    tokio::io::copy(&mut limited, stream).await?;
     stream.flush().await?;
     Ok(())
 }

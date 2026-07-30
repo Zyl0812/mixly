@@ -15,17 +15,12 @@ pub struct Config {
     pub proxy: ProxyConfig,
     #[serde(default)]
     pub player: PlayerConfig,
-    #[serde(default)]
-    pub lyrics: LyricsConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneralConfig {
     #[serde(default = "default_quality")]
     pub quality: String,
-    /// 搜索范围默认：all | netease | qq（保留字段，兼容旧配置）
-    #[serde(default = "default_platform")]
-    pub default_platform: String,
     /// 双平台搜索时优先的平台：qq | netease（默认 qq）
     #[serde(default = "default_preferred_platform")]
     pub preferred_platform: String,
@@ -33,10 +28,6 @@ pub struct GeneralConfig {
 
 fn default_quality() -> String {
     "Exhigh".into()
-}
-
-fn default_platform() -> String {
-    "all".into()
 }
 
 fn default_preferred_platform() -> String {
@@ -47,7 +38,6 @@ impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             quality: default_quality(),
-            default_platform: default_platform(),
             preferred_platform: default_preferred_platform(),
         }
     }
@@ -105,31 +95,12 @@ impl Default for PlayerConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LyricsConfig {
-    #[serde(default = "default_font_size")]
-    pub font_size: u32,
-}
-
-fn default_font_size() -> u32 {
-    24
-}
-
-impl Default for LyricsConfig {
-    fn default() -> Self {
-        Self {
-            font_size: default_font_size(),
-        }
-    }
-}
-
 impl Default for Config {
     fn default() -> Self {
         Self {
             general: GeneralConfig::default(),
             proxy: ProxyConfig::default(),
             player: PlayerConfig::default(),
-            lyrics: LyricsConfig::default(),
         }
     }
 }

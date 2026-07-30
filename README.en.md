@@ -1,0 +1,174 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <img src="assets/logo.png" alt="mixly logo" width="160">
+  </picture>
+</p>
+
+<h1 align="center">mixly</h1>
+
+<p align="center">Lightweight <strong>CLI / TUI</strong> music player written in Rust.</p>
+
+<p align="center">
+  <img alt="language" src="https://img.shields.io/badge/rust-2021-orange?logo=rust">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-blue">
+</p>
+
+<p align="center"><a href="README.md">简体中文</a> | <strong>English</strong></p>
+
+## Install (Windows x86_64)
+
+```powershell
+irm https://raw.githubusercontent.com/Zyl0812/mixly/main/install.ps1 | iex
+```
+
+That's it. The script downloads the prebuilt `mixly.exe` into `%LOCALAPPDATA%\Programs\mixly`, adds it
+to your user `PATH`, and installs [mpv](https://mpv.io/) via winget/scoop if you don't have it.
+No Rust toolchain required. Open a new terminal afterwards so `PATH` takes effect.
+
+Verify:
+
+```powershell
+mixly --help
+```
+
+## Features
+
+- Netease Cloud Music + QQ Music
+- Mixed local playlists (both platforms in one list)
+- High-quality streaming via external **mpv**
+- Real proxy coverage for **API requests and audio streams** (local HTTP relay)
+- Ships an [agent skill](#agent-skill) so Claude Code / Codex / Grok can drive it from the CLI
+
+## Usage
+
+```bash
+# Search
+mixly search "海阔天空" --platform all
+mixly search "晴天" --platform qq --limit 5
+
+# Play one track
+mixly play netease <song_id>
+mixly play qq <song_id>
+
+# Login (QR — scan with phone app)
+mixly login --platform netease
+mixly login --platform qq
+
+# Playlists
+mixly playlist create "My Mix"
+mixly playlist list
+mixly playlist add "My Mix" netease <id> --name "Song" --artist "Artist"
+mixly playlist add "My Mix" qq <id>
+mixly playlist show "My Mix"
+mixly playlist play "My Mix"
+mixly playlist remove "My Mix" 0
+mixly playlist rename "My Mix" "Mixed"
+mixly playlist delete "Mixed"
+
+# TUI
+mixly tui
+
+# Force proxy
+mixly --proxy socks5://127.0.0.1:7890 search "test"
+```
+
+### TUI keys
+
+| Key | Action |
+|---|---|
+| `j` / `k` | Move |
+| `Enter` | Play selection |
+| `Space` | Pause / resume |
+| `n` / `p` | Next / previous |
+| `/` | Search |
+| `a` | Add search hit to playlist |
+| `+` / `-` | Volume |
+| `h` / `l` | Seek ±5s |
+| `m` | Cycle play mode |
+| `q` | Quit |
+
+## Agent skill
+
+mixly ships [`skills/mixly/SKILL.md`](skills/mixly/SKILL.md). Drop it into an AI coding agent
+(Claude Code, Codex, Grok, …) and you can drive the player in plain language — the agent runs the same
+`mixly` commands under the hood and never touches mixly's source.
+
+Install by copying or symlinking the directory into your tool's skill folder:
+
+```bash
+# Claude Code (project-level)
+mkdir -p .claude/skills && cp -r skills/mixly .claude/skills/
+
+# Claude Code (global, available in every project)
+mkdir -p ~/.claude/skills && cp -r skills/mixly ~/.claude/skills/
+
+# Grok CLI
+mkdir -p .grok/skills && cp -r skills/mixly .grok/skills/
+```
+
+Then just ask:
+
+> "Play 晴天 by Jay Chou" → the agent runs `search`, picks a hit, backgrounds `play`, and tells you what's on
+>
+> "Make a playlist called Commute with these five songs" → `playlist create` + `search` / `add` per track, then `show` to confirm
+>
+> "Import the music folder on my D: drive" → `local import`
+
+The skill spells out the guardrails, so the agent won't make a mess:
+
+- CLI only — it never launches `mixly tui` (the interactive UI would block it)
+- Playback is a long-running process, so it's always backgrounded — no waiting out a whole song in the foreground
+- Never runs two `play` commands at once (they'd fight over mpv's IPC pipe)
+- Login requires *you* to scan the QR code; the agent won't pretend it's signed in
+- Never pastes token file contents into the conversation
+- Has a recovery path for the usual failures: empty stream URL → tells you to `login` or switches platform; no search hits → suggests `--proxy` or a shorter query; mpv errors → tells you to install mpv
+
+## Configuration
+
+Config directory (via `directories` crate):
+
+| OS | Path |
+|---|---|
+| Windows | `%APPDATA%\mixly\` |
+| Linux | `~/.config/mixly/` |
+| macOS | `~/Library/Application Support/mixly/` |
+
+`config.toml` example:
+
+```toml
+[general]
+quality = "Exhigh"          # Standard | Higher | Exhigh | Lossless
+default_platform = "all"
+
+[proxy]
+enabled = false
+url = "socks5://127.0.0.1:7890"
+
+[player]
+mpv_path = "mpv"
+```
+
+Tokens are stored separately as `netease_token.json` / `qq_token.json`.
+
+### Proxy priority
+
+```
+--proxy  >  config.toml [proxy]  >  ALL_PROXY/HTTPS_PROXY/HTTP_PROXY  >  direct
+```
+
+Audio always goes through mixly's local relay (`127.0.0.1:<ephemeral>/current`) so SOCKS5 and HTTPS CDN work even when mpv/FFmpeg cannot use SOCKS.
+
+**Note:** `netease-qq-music-api` 0.1.0 builds its internal `reqwest::Client` with `.no_proxy()`, so `ALL_PROXY` does **not** affect upstream API calls until that crate changes. The audio relay (our client) still honors proxy settings — the critical path for campus SOCKS + HTTPS CDN.
+
+## Architecture (short)
+
+1. **API** — `netease-qq-music-api =0.1.0`, isolated in `src/api/client.rs`
+2. **Proxy for API** — inject `ALL_PROXY` before Tokio; Cargo unifies `reqwest` with `socks`
+3. **Proxy for audio** — local HTTP relay streams CDN via reqwest (Range / Referer / refresh)
+4. **Playback** — mpv JSON IPC (`interprocess` local sockets / Windows named pipes)
+5. **Queue** — owned by mixly (one `loadfile` per track; links expire)
+
+## License
+
+MIT (see `license` in [Cargo.toml](Cargo.toml)).

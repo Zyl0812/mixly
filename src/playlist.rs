@@ -183,6 +183,24 @@ fn now_ts() -> i64 {
         .unwrap_or(0)
 }
 
+/// Fisher–Yates 打乱，时间种子 LCG（免 rand 依赖）。CLI 歌单与队列洗牌共用。
+pub fn shuffle<T>(items: &mut [T]) {
+    if items.len() < 2 {
+        return;
+    }
+    let mut state = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1)
+        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        .wrapping_add(1);
+    for i in (1..items.len()).rev() {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let j = (state as usize) % (i + 1);
+        items.swap(i, j);
+    }
+}
+
 /// In-process play queue: one track loaded at a time via relay.
 #[derive(Debug, Clone, Default)]
 pub struct PlayQueue {
@@ -255,13 +273,7 @@ impl PlayQueue {
 
     fn rebuild_shuffle(&mut self) {
         self.shuffle_order = (0..self.songs.len()).collect();
-        // Simple LCG shuffle for no extra dep
-        let mut state = (now_ts() as u64).wrapping_mul(6364136223846793005).wrapping_add(1);
-        for i in (1..self.shuffle_order.len()).rev() {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let j = (state as usize) % (i + 1);
-            self.shuffle_order.swap(i, j);
-        }
+        shuffle(&mut self.shuffle_order);
     }
 
     pub fn set_mode(&mut self, mode: PlayMode) {
@@ -436,17 +448,10 @@ mod tests {
 
     #[test]
     fn shuffle_songs_preserves_members() {
-        // exercise same algorithm as main::shuffle_songs via local copy for store independence
         let mut songs = vec![sample_song("a"), sample_song("b"), sample_song("c"), sample_song("d")];
         let before: std::collections::HashSet<_> =
             songs.iter().map(|s| s.id.clone()).collect();
-        // inline mini shuffle
-        let mut state = 42u64;
-        for i in (1..songs.len()).rev() {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            let j = (state as usize) % (i + 1);
-            songs.swap(i, j);
-        }
+        shuffle(&mut songs);
         let after: std::collections::HashSet<_> =
             songs.iter().map(|s| s.id.clone()).collect();
         assert_eq!(before, after);

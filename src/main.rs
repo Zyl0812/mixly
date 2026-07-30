@@ -324,7 +324,7 @@ async fn cmd_play_resolve(
             return play_songs(api, cfg, vec![song], mode).await;
         }
         let keyword = targets.join(" ");
-        return play_by_search(api, paths, cfg, &keyword, search_platform, prefer, loop_flag, random)
+        return play_by_search(api, cfg, &keyword, search_platform, prefer, loop_flag, random)
             .await;
     }
 
@@ -356,7 +356,7 @@ async fn cmd_play_resolve(
         return play_local_playlist(api, store, cfg, &name, loop_flag, random).await;
     }
 
-    play_by_search(api, paths, cfg, &name, search_platform, prefer, loop_flag, random).await
+    play_by_search(api, cfg, &name, search_platform, prefer, loop_flag, random).await
 }
 
 async fn resolve_song_for_platform_id(
@@ -408,26 +408,6 @@ fn playlist_play_mode(loop_flag: bool, random: bool) -> (PlayMode, bool) {
     }
 }
 
-/// Fisher–Yates 打乱（不依赖额外 crate）
-fn shuffle_songs(songs: &mut [Song]) {
-    if songs.len() < 2 {
-        return;
-    }
-    let mut state = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(1)
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(1);
-    for i in (1..songs.len()).rev() {
-        state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1);
-        let j = (state as usize) % (i + 1);
-        songs.swap(i, j);
-    }
-}
-
 async fn play_local_playlist(
     api: Arc<ApiClient>,
     store: &PlaylistStore,
@@ -443,7 +423,7 @@ async fn play_local_playlist(
     let mut songs = pl.songs;
     let (mode, do_shuffle) = playlist_play_mode(loop_flag, random);
     if do_shuffle {
-        shuffle_songs(&mut songs);
+        mixly::playlist::shuffle(&mut songs);
         println!(
             "歌单「{}」随机播放（{} 首{}）",
             pl.name,
@@ -460,7 +440,6 @@ async fn play_local_playlist(
 
 async fn play_by_search(
     api: Arc<ApiClient>,
-    _paths: &AppPaths,
     cfg: &mixly::Config,
     keyword: &str,
     platform: PlatformArg,
@@ -495,7 +474,7 @@ async fn play_by_search(
     let keyword_l = keyword.to_lowercase();
     let idx = hits
         .iter()
-        .position(|s| s.name.eq_ignore_ascii_case(keyword) || s.name.to_lowercase() == keyword_l)
+        .position(|s| s.name.to_lowercase() == keyword_l)
         .unwrap_or(0);
     let song = hits.swap_remove(idx);
     println!("选中: {}  id={}", song.display_line(), song.id);

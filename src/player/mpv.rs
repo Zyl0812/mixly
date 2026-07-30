@@ -90,10 +90,6 @@ impl MpvPlayer {
             .context("waiting for mpv IPC")
     }
 
-    pub fn socket_path(&self) -> &str {
-        &self.socket_path
-    }
-
     async fn connect(&self) -> Result<LocalSocketStream> {
         connect_local(&self.socket_path).await
     }
@@ -160,11 +156,6 @@ impl MpvPlayer {
         self.command(json!(["set_property", "volume", volume]))
             .await?;
         self.last_volume = volume;
-        Ok(())
-    }
-
-    pub async fn seek_absolute(&self, seconds: f64) -> Result<()> {
-        self.command(json!(["seek", seconds, "absolute"])).await?;
         Ok(())
     }
 

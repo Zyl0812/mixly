@@ -20,6 +20,7 @@ use ratatui::widgets::{
     ScrollbarOrientation, ScrollbarState,
 };
 use ratatui::Frame;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::app::{App, FocusPane, InputMode, ViewMode};
 use super::logo;
@@ -760,24 +761,8 @@ fn fmt_ms(ms: Option<u64>) -> String {
     }
 }
 
-fn char_width(c: char) -> usize {
-    let u = c as u32;
-    let wide = (0x1100..=0x115F).contains(&u)
-        || (0x2E80..=0xA4CF).contains(&u)
-        || (0xAC00..=0xD7A3).contains(&u)
-        || (0xF900..=0xFAFF).contains(&u)
-        || (0xFE30..=0xFE6F).contains(&u)
-        || (0xFF00..=0xFF60).contains(&u)
-        || (0xFFE0..=0xFFE6).contains(&u);
-    if wide {
-        2
-    } else {
-        1
-    }
-}
-
 fn str_width(s: &str) -> usize {
-    s.chars().map(char_width).sum()
+    UnicodeWidthStr::width(s)
 }
 
 /// 按终端列宽截断，超出补 `…`。
@@ -791,7 +776,7 @@ fn trunc(s: &str, max: usize) -> String {
     let mut out = String::new();
     let mut w = 0;
     for c in s.chars() {
-        let cw = char_width(c);
+        let cw = UnicodeWidthChar::width(c).unwrap_or(0);
         if w + cw > max.saturating_sub(1) {
             break;
         }

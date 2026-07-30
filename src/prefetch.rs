@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use futures_util::StreamExt;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 
@@ -138,31 +137,9 @@ async fn download_to_file(
     platform: Platform,
     path: &PathBuf,
 ) -> Result<()> {
-    let mut headers = HeaderMap::new();
-    let referer = match platform {
-        Platform::Netease => "https://music.163.com/",
-        Platform::Qq => "https://y.qq.com/",
-        Platform::Local => "",
-    };
-    if referer.is_empty() {
-        // still continue for non-local (shouldn't reach here for Local)
-    }
-    if !referer.is_empty() {
-        headers.insert(
-            HeaderName::from_static("referer"),
-            HeaderValue::from_static(referer),
-        );
-    }
-    headers.insert(
-        HeaderName::from_static("user-agent"),
-        HeaderValue::from_static(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        ),
-    );
-
     let resp = client
         .get(url)
-        .headers(headers)
+        .headers(crate::relay::cdn_headers(platform))
         .send()
         .await
         .context("预取 HTTP 请求")?;

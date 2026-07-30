@@ -112,37 +112,40 @@ fn estimate_module_step(img: &image::GrayImage) -> u32 {
     }
 }
 
-fn decode_base64(input: &str) -> Result<Vec<u8>> {
-    fn val(c: u8) -> Option<u8> {
+/// 手写 base64 解码（免依赖）。支持无填充的 2/3 字符尾组。
+pub fn decode_base64(input: &str) -> Result<Vec<u8>> {
+    fn val(c: u8) -> Result<u8> {
         match c {
-            b'A'..=b'Z' => Some(c - b'A'),
-            b'a'..=b'z' => Some(c - b'a' + 26),
-            b'0'..=b'9' => Some(c - b'0' + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
+            b'A'..=b'Z' => Ok(c - b'A'),
+            b'a'..=b'z' => Ok(c - b'a' + 26),
+            b'0'..=b'9' => Ok(c - b'0' + 52),
+            b'+' => Ok(62),
+            b'/' => Ok(63),
+            _ => Err(anyhow!("非法 base64 字符")),
         }
     }
     let cleaned: Vec<u8> = input
         .bytes()
         .filter(|b| !b.is_ascii_whitespace() && *b != b'=')
         .collect();
-    if cleaned.len() < 4 {
+    if cleaned.len() < 2 {
         bail!("base64 过短");
     }
     let mut out = Vec::with_capacity(cleaned.len() * 3 / 4);
-    let mut i = 0;
-    while i + 3 < cleaned.len() {
-        let (a, b, c, d) = (
-            val(cleaned[i]).ok_or_else(|| anyhow!("非法 base64"))?,
-            val(cleaned[i + 1]).ok_or_else(|| anyhow!("非法 base64"))?,
-            val(cleaned[i + 2]).ok_or_else(|| anyhow!("非法 base64"))?,
-            val(cleaned[i + 3]).ok_or_else(|| anyhow!("非法 base64"))?,
-        );
+    for chunk in cleaned.chunks(4) {
+        if chunk.len() < 2 {
+            bail!("base64 尾部残缺");
+        }
+        let a = val(chunk[0])?;
+        let b = val(chunk[1])?;
         out.push((a << 2) | (b >> 4));
-        out.push((b << 4) | (c >> 2));
-        out.push((c << 6) | d);
-        i += 4;
+        if let Some(&c) = chunk.get(2) {
+            let c = val(c)?;
+            out.push((b << 4) | (c >> 2));
+            if let Some(&d) = chunk.get(3) {
+                out.push((c << 6) | val(d)?);
+            }
+        }
     }
     Ok(out)
 }
