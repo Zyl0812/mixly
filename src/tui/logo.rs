@@ -25,9 +25,7 @@ fn build_mask() -> Option<Mask> {
     // 墨 = 不透明且偏暗（黑色线稿；透明/白底都不算）
     let ink: Vec<bool> = img
         .pixels()
-        .map(|p| {
-            p.0[3] >= 128 && (p.0[0] as u32 + p.0[1] as u32 + p.0[2] as u32) / 3 < 128
-        })
+        .map(|p| p.0[3] >= 128 && (p.0[0] as u32 + p.0[1] as u32 + p.0[2] as u32) / 3 < 128)
         .collect();
 
     // 裁掉四周空白，让可用面积全部留给图形本体

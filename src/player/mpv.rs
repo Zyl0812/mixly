@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use interprocess::local_socket::tokio::prelude::*;
-#[cfg(windows)]
-use interprocess::local_socket::{GenericNamespaced, ToNsName};
 #[cfg(not(windows))]
 use interprocess::local_socket::{GenericFilePath, ToFsName};
+#[cfg(windows)]
+use interprocess::local_socket::{GenericNamespaced, ToNsName};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -86,8 +86,7 @@ impl MpvPlayer {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| anyhow!("mpv IPC not ready")))
-            .context("waiting for mpv IPC")
+        Err(last_err.unwrap_or_else(|| anyhow!("mpv IPC not ready"))).context("waiting for mpv IPC")
     }
 
     async fn connect(&self) -> Result<LocalSocketStream> {
@@ -118,10 +117,7 @@ impl MpvPlayer {
             let v: Value = serde_json::from_str(response.trim())
                 .with_context(|| format!("parse mpv response: {response}"))?;
             if v.get("error").is_some() {
-                let err = v
-                    .get("error")
-                    .and_then(|e| e.as_str())
-                    .unwrap_or("unknown");
+                let err = v.get("error").and_then(|e| e.as_str()).unwrap_or("unknown");
                 if err != "success" {
                     bail!("mpv error: {err} (cmd={command})");
                 }
@@ -140,7 +136,8 @@ impl MpvPlayer {
     }
 
     pub async fn set_pause(&self, paused: bool) -> Result<()> {
-        self.command(json!(["set_property", "pause", paused])).await?;
+        self.command(json!(["set_property", "pause", paused]))
+            .await?;
         Ok(())
     }
 
@@ -165,14 +162,8 @@ impl MpvPlayer {
     }
 
     pub async fn snapshot(&self) -> Result<PlaybackSnapshot> {
-        let time_pos = self
-            .get_number("time-pos")
-            .await
-            .unwrap_or(0.0);
-        let duration = self
-            .get_number("duration")
-            .await
-            .unwrap_or(0.0);
+        let time_pos = self.get_number("time-pos").await.unwrap_or(0.0);
+        let duration = self.get_number("duration").await.unwrap_or(0.0);
         let paused = self.get_bool("pause").await.unwrap_or(false);
         let volume = self.get_number("volume").await.unwrap_or(100.0);
         let eof = self.get_bool("eof-reached").await.unwrap_or(false);
@@ -254,4 +245,3 @@ async fn connect_local(path: &str) -> Result<LocalSocketStream> {
             .with_context(|| format!("connect mpv socket {path}"))
     }
 }
-

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::{Platform, Quality};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub general: GeneralConfig,
@@ -95,16 +95,6 @@ impl Default for PlayerConfig {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            proxy: ProxyConfig::default(),
-            player: PlayerConfig::default(),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct AppPaths {
     pub config_dir: PathBuf,
@@ -142,8 +132,8 @@ pub fn load_config(path: &Path) -> Result<Config> {
     if !path.exists() {
         return Ok(Config::default());
     }
-    let text = fs::read_to_string(path)
-        .with_context(|| format!("read config {}", path.display()))?;
+    let text =
+        fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
     let cfg: Config = toml::from_str(&text).context("parse config.toml")?;
     Ok(cfg)
 }

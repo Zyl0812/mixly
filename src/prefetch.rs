@@ -17,6 +17,17 @@ pub const PREFETCH_PROGRESS_THRESHOLD: f64 = 0.70;
 /// 剩余时间阈值（秒）：小于则开始预取（取 15~20 区间中值）。
 pub const PREFETCH_REMAIN_SECS: f64 = 18.0;
 
+/// 下载未完成时删除残留文件；成功后由 PrefetchedTrack/AudioRelay 接管。
+struct PendingCache(Option<PathBuf>);
+
+impl Drop for PendingCache {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 /// 是否应开始预取下一首。
 ///
 /// 条件（满足其一即可）：
@@ -43,6 +54,12 @@ pub struct PrefetchedTrack {
 impl PrefetchedTrack {
     pub fn matches(&self, song: &Song) -> bool {
         self.song.platform == song.platform && self.song.id == song.id
+    }
+
+    /// 把缓存所有权交给 AudioRelay；本对象随后不再删除该文件。
+    pub fn into_track(mut self) -> TrackSource {
+        self.ephemeral = false;
+        self.track.clone()
     }
 
     /// 删除临时缓存文件（忽略错误）；永不删除用户本地音乐文件。
@@ -95,9 +112,11 @@ pub async fn prefetch_song(
         tokio::fs::create_dir_all(parent).await.ok();
     }
 
+    let mut pending = PendingCache(Some(path.clone()));
     download_to_file(client, &track.url, song.platform, &path)
         .await
         .with_context(|| format!("预取下载失败 {}", song.display_line()))?;
+    pending.0 = None;
 
     track.local_cache = Some(path.clone());
     info!(
@@ -202,12 +221,8 @@ impl PrefetchJob {
 }
 
 /// 若任务已完成则取出，否则保留。
-pub async fn try_take_finished(
-    job: &mut Option<PrefetchJob>,
-) -> Option<Result<PrefetchedTrack>> {
-    let Some(j) = job.as_ref() else {
-        return None;
-    };
+pub async fn try_take_finished(job: &mut Option<PrefetchJob>) -> Option<Result<PrefetchedTrack>> {
+    let j = job.as_ref()?;
     if !j.handle.is_finished() {
         return None;
     }

@@ -60,10 +60,7 @@ fn parse_timestamp(s: &str) -> Option<f64> {
     }
     // last part is ss.xx
     let sec_part = parts.last()?;
-    if !sec_part
-        .chars()
-        .all(|c| c.is_ascii_digit() || c == '.')
-    {
+    if !sec_part.chars().all(|c| c.is_ascii_digit() || c == '.') {
         return None;
     }
     for p in &parts[..parts.len() - 1] {
@@ -131,7 +128,9 @@ mod tests {
         let lines = parse_lrc(lrc);
         assert!(lines.iter().any(|(_, t)| t == "ok"));
         // 99:99 → 99*60+99 = 6039
-        assert!(lines.iter().any(|(t, text)| text == "also ok-ish" && *t > 6000.0));
+        assert!(lines
+            .iter()
+            .any(|(t, text)| text == "also ok-ish" && *t > 6000.0));
     }
 
     #[test]

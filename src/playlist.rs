@@ -41,7 +41,7 @@ impl PlaylistStore {
     fn read_index(&self) -> Result<PlaylistIndex> {
         let text = fs::read_to_string(&self.index_path)
             .with_context(|| format!("read {}", self.index_path.display()))?;
-        Ok(serde_json::from_str(&text).context("parse playlist index")?)
+        serde_json::from_str(&text).context("parse playlist index")
     }
 
     fn write_index(&self, index: &PlaylistIndex) -> Result<()> {
@@ -144,6 +144,44 @@ impl PlaylistStore {
         Ok(pl)
     }
 
+    /// 将播放时识别到的专辑补回所有同平台、同 ID 的歌单条目。
+    /// 只填空值，不覆盖用户已保存的专辑名。
+    pub fn backfill_album(&self, song: &Song) -> Result<bool> {
+        let Some(album) = song
+            .album
+            .as_deref()
+            .map(str::trim)
+            .filter(|album| !album.is_empty())
+        else {
+            return Ok(false);
+        };
+
+        let index = self.read_index()?;
+        let mut updated = false;
+        for meta in index.playlists {
+            let mut pl = self.load_file(&self.playlist_path(&meta.file))?;
+            let mut changed = false;
+            for stored in &mut pl.songs {
+                let missing = stored
+                    .album
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|album| !album.is_empty())
+                    .is_none();
+                if missing && stored.platform == song.platform && stored.id == song.id {
+                    stored.album = Some(album.to_owned());
+                    changed = true;
+                }
+            }
+            if changed {
+                pl.updated_at = now_ts();
+                self.save_playlist(&pl)?;
+                updated = true;
+            }
+        }
+        Ok(updated)
+    }
+
     pub fn remove_at(&self, id_or_name: &str, index: usize) -> Result<Playlist> {
         let mut pl = self.find(id_or_name)?;
         if index >= pl.songs.len() {
@@ -162,7 +200,10 @@ impl PlaylistStore {
             bail!("歌单为空，无法调序");
         }
         if from >= len || to >= len {
-            bail!("调序下标越界：from={from} to={to}，歌单共 {len} 首（下标 0..{}）", len - 1);
+            bail!(
+                "调序下标越界：from={from} to={to}，歌单共 {len} 首（下标 0..{}）",
+                len - 1
+            );
         }
         if from == to {
             return Ok(pl);
@@ -410,12 +451,8 @@ mod tests {
         let store = PlaylistStore::new(dir.path()).unwrap();
         let pl = store.create("Mix").unwrap();
         assert_eq!(pl.name, "Mix");
-        store
-            .add_song(&pl.id, sample_song("1"))
-            .unwrap();
-        store
-            .add_song("Mix", sample_song("2"))
-            .unwrap();
+        store.add_song(&pl.id, sample_song("1")).unwrap();
+        store.add_song("Mix", sample_song("2")).unwrap();
         let loaded = store.find("Mix").unwrap();
         assert_eq!(loaded.songs.len(), 2);
         store.remove_at("Mix", 0).unwrap();
@@ -426,6 +463,26 @@ mod tests {
         assert_eq!(store.find(&pl.id).unwrap().name, "Mixed");
         store.delete(&pl.id).unwrap();
         assert!(store.find(&pl.id).is_err());
+    }
+
+    #[test]
+    fn playback_backfills_album_without_overwriting_existing_value() {
+        let dir = tempdir().unwrap();
+        let store = PlaylistStore::new(dir.path()).unwrap();
+        let pl = store.create("Mix").unwrap();
+        store.add_song(&pl.id, sample_song("1")).unwrap();
+        let mut existing = sample_song("1");
+        existing.album = Some("手动专辑".into());
+        store.add_song(&pl.id, existing).unwrap();
+
+        let mut enriched = sample_song("1");
+        enriched.album = Some("在线专辑".into());
+        assert!(store.backfill_album(&enriched).unwrap());
+
+        let loaded = store.find(&pl.id).unwrap();
+        assert_eq!(loaded.songs[0].album.as_deref(), Some("在线专辑"));
+        assert_eq!(loaded.songs[1].album.as_deref(), Some("手动专辑"));
+        assert!(!store.backfill_album(&enriched).unwrap());
     }
 
     #[test]
@@ -448,12 +505,15 @@ mod tests {
 
     #[test]
     fn shuffle_songs_preserves_members() {
-        let mut songs = vec![sample_song("a"), sample_song("b"), sample_song("c"), sample_song("d")];
-        let before: std::collections::HashSet<_> =
-            songs.iter().map(|s| s.id.clone()).collect();
+        let mut songs = vec![
+            sample_song("a"),
+            sample_song("b"),
+            sample_song("c"),
+            sample_song("d"),
+        ];
+        let before: std::collections::HashSet<_> = songs.iter().map(|s| s.id.clone()).collect();
         shuffle(&mut songs);
-        let after: std::collections::HashSet<_> =
-            songs.iter().map(|s| s.id.clone()).collect();
+        let after: std::collections::HashSet<_> = songs.iter().map(|s| s.id.clone()).collect();
         assert_eq!(before, after);
         assert_eq!(songs.len(), 4);
     }

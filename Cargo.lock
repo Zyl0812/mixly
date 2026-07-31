@@ -1408,8 +1408,6 @@ dependencies = [
 [[package]]
 name = "netease-qq-music-api"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13f80867afe42f49564a2ef665f42010020a348fa1b026587ae3f5299d0c7926"
 dependencies = [
  "aes",
  "async-tungstenite",

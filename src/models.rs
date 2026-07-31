@@ -114,11 +114,12 @@ pub struct Playlist {
     pub updated_at: i64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum Quality {
     Standard,
     Higher,
+    #[default]
     Exhigh,
     Lossless,
 }
@@ -141,12 +142,6 @@ impl Quality {
             Self::Exhigh => "Exhigh",
             Self::Lossless => "Lossless",
         }
-    }
-}
-
-impl Default for Quality {
-    fn default() -> Self {
-        Self::Exhigh
     }
 }
 
@@ -233,6 +228,8 @@ mod tests {
     fn default_tui_status_ready_is_chinese_source() {
         // Mirrors the shipped default in tui::app ("就绪")
         let ready = "就绪";
-        assert!(ready.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)));
+        assert!(ready
+            .chars()
+            .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)));
     }
 }

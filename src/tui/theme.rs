@@ -30,7 +30,9 @@ pub fn accent() -> Style {
     Style::default().fg(ACCENT_DEEP)
 }
 pub fn bold_accent() -> Style {
-    Style::default().fg(ACCENT_DEEP).add_modifier(Modifier::BOLD)
+    Style::default()
+        .fg(ACCENT_DEEP)
+        .add_modifier(Modifier::BOLD)
 }
 pub fn line() -> Style {
     Style::default().fg(LINE)
@@ -50,7 +52,9 @@ pub fn selected() -> Style {
 /// 面板标题：聚焦时用赭石色，否则中性
 pub fn pane_title(focused: bool) -> Style {
     if focused {
-        Style::default().fg(ACCENT_DEEP).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(ACCENT_DEEP)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(FAINT)
     }

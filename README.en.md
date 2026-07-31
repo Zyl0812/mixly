@@ -135,7 +135,7 @@ Config directory (via `directories` crate):
 ```toml
 [general]
 quality = "Exhigh"          # Standard | Higher | Exhigh | Lossless
-default_platform = "all"
+preferred_platform = "qq"
 
 [proxy]
 enabled = false
@@ -155,12 +155,12 @@ Tokens are stored separately as `netease_token.json` / `qq_token.json`.
 
 Audio always goes through mixly's local relay (`127.0.0.1:<ephemeral>/current`) so SOCKS5 and HTTPS CDN work even when mpv/FFmpeg cannot use SOCKS.
 
-**Note:** `netease-qq-music-api` 0.1.0 builds its internal `reqwest::Client` with `.no_proxy()`, so `ALL_PROXY` does **not** affect upstream API calls until that crate changes. The audio relay (our client) still honors proxy settings — the critical path for campus SOCKS + HTTPS CDN.
+The API clients and audio relay use the same resolved proxy. mixly carries a minimal local patch for the locked `netease-qq-music-api` 0.1.0 that removes its forced `.no_proxy()` calls.
 
 ## Architecture (short)
 
 1. **API** — `netease-qq-music-api =0.1.0`, isolated in `src/api/client.rs`
-2. **Proxy for API** — inject `ALL_PROXY` before Tokio; Cargo unifies `reqwest` with `socks`
+2. **Proxy for API** — inject `ALL_PROXY` before Tokio; the local dependency patch makes upstream API clients honor it
 3. **Proxy for audio** — local HTTP relay streams CDN via reqwest (Range / Referer / refresh)
 4. **Playback** — mpv JSON IPC (`interprocess` local sockets / Windows named pipes)
 5. **Queue** — owned by mixly (one `loadfile` per track; links expire)

@@ -5,9 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
-use netease_qq_music_api::models::{
-    LoginStatus, LoginToken, Platform as ApiPlatform, SongQuality,
-};
+use netease_qq_music_api::models::{LoginStatus, LoginToken, Platform as ApiPlatform, SongQuality};
 use netease_qq_music_api::MusicClient;
 use tokio::time::sleep;
 use tracing::{info, warn};
@@ -312,7 +310,10 @@ impl ApiClient {
         let qr = session.qr_code();
         // Still persist payload for debugging / offline view.
         self.paths.ensure()?;
-        let qr_path = self.paths.config_dir.join(format!("login_qr_{platform}.txt"));
+        let qr_path = self
+            .paths
+            .config_dir
+            .join(format!("login_qr_{platform}.txt"));
         let _ = std::fs::write(&qr_path, qr);
 
         let platform_name = match platform {
@@ -327,7 +328,10 @@ impl ApiClient {
             println!("（终端绘制失败: {e}）");
             println!("二维码数据已写入: {}", qr_path.display());
             if let Some(b64) = qr.strip_prefix("data:image/png;base64,") {
-                let png_path = self.paths.config_dir.join(format!("login_qr_{platform}.png"));
+                let png_path = self
+                    .paths
+                    .config_dir
+                    .join(format!("login_qr_{platform}.png"));
                 if let Ok(bytes) = crate::qr_term::decode_base64(b64) {
                     let _ = std::fs::write(&png_path, bytes);
                     println!("PNG 图片已保存: {}", png_path.display());
@@ -414,6 +418,19 @@ pub fn should_load_after_eof(eof: bool, eof_latched: bool, queue_advanced: bool)
     }
 }
 
+fn quality_ladder(preferred: Quality) -> Vec<Quality> {
+    match preferred {
+        Quality::Lossless => vec![
+            Quality::Lossless,
+            Quality::Exhigh,
+            Quality::Higher,
+            Quality::Standard,
+        ],
+        Quality::Exhigh => vec![Quality::Exhigh, Quality::Higher, Quality::Standard],
+        Quality::Higher => vec![Quality::Higher, Quality::Exhigh, Quality::Standard],
+        Quality::Standard => vec![Quality::Standard, Quality::Higher, Quality::Exhigh],
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,19 +466,3 @@ mod tests {
         assert!(!latched3 && !load3);
     }
 }
-
-fn quality_ladder(preferred: Quality) -> Vec<Quality> {
-    match preferred {
-        Quality::Lossless => vec![
-            Quality::Lossless,
-            Quality::Exhigh,
-            Quality::Higher,
-            Quality::Standard,
-        ],
-        Quality::Exhigh => vec![Quality::Exhigh, Quality::Higher, Quality::Standard],
-        Quality::Higher => vec![Quality::Higher, Quality::Exhigh, Quality::Standard],
-        Quality::Standard => vec![Quality::Standard, Quality::Higher, Quality::Exhigh],
-    }
-}
-
-

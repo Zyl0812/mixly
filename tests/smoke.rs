@@ -20,7 +20,11 @@ async fn smoke_netease_search_url_lyrics() {
         match api.play_url(Platform::Netease, &song.id).await {
             Ok(url) if url.starts_with("http") => {
                 got_url = true;
-                println!("netease url ok id={} prefix={}", song.id, &url[..url.len().min(48)]);
+                println!(
+                    "netease url ok id={} prefix={}",
+                    song.id,
+                    &url[..url.len().min(48)]
+                );
                 break;
             }
             Ok(_) => last_err = format!("empty url for {}", song.id),

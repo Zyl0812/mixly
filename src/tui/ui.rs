@@ -80,12 +80,18 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
 
     if app.input_mode == InputMode::Search {
         left.push(Span::styled("搜索 › ", t::accent()));
-        left.push(Span::styled(app.input_buffer.clone(), Style::default().fg(t::TEXT)));
+        left.push(Span::styled(
+            app.input_buffer.clone(),
+            Style::default().fg(t::TEXT),
+        ));
         left.push(Span::styled("▏", Style::default().fg(t::ACCENT)));
         left.push(Span::styled("  Enter 搜索 · Esc 取消", t::faint()));
     } else {
         let (dot, proxy) = if app.proxy_active {
-            (Span::styled("● ", Style::default().fg(t::SAGE)), "代理 已启用")
+            (
+                Span::styled("● ", Style::default().fg(t::SAGE)),
+                "代理 已启用",
+            )
         } else {
             (Span::styled("● ", t::faint()), "代理 关闭")
         };
@@ -204,10 +210,7 @@ fn draw_playlists(f: &mut Frame, area: Rect, app: &App) {
             let sel = i == app.playlist_cursor;
             let line = spread(
                 vec![
-                    Span::styled(
-                        if sel { "▎" } else { " " },
-                        Style::default().fg(t::ACCENT),
-                    ),
+                    Span::styled(if sel { "▎" } else { " " }, Style::default().fg(t::ACCENT)),
                     Span::styled(
                         trunc(&p.name, width.saturating_sub(7) as usize),
                         if sel {
@@ -292,8 +295,11 @@ fn draw_songs(f: &mut Frame, area: Rect, app: &App) {
                 .as_ref()
                 .map(|(p, id)| *p == s.platform && *id == s.id)
                 .unwrap_or(false);
-            ListItem::new(song_line(i, s, list_w, sel, playing))
-                .style(if sel { t::selected() } else { Style::default() })
+            ListItem::new(song_line(i, s, list_w, sel, playing)).style(if sel {
+                t::selected()
+            } else {
+                Style::default()
+            })
         })
         .collect();
 
@@ -320,8 +326,12 @@ fn draw_songs(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_queue(f: &mut Frame, area: Rect, app: &App) {
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(2)])
-        .split(area);
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(2),
+    ])
+    .split(area);
     pane_header(f, rows[0], "播放队列", "Q 收起", false);
 
     let cur = app.queue.index;
@@ -374,7 +384,10 @@ fn draw_queue(f: &mut Frame, area: Rect, app: &App) {
         Paragraph::new(vec![
             Line::from(Span::styled(" 当前歌词", t::faint())),
             Line::from(Span::styled(
-                format!(" {}", trunc(&lyric, rows[2].width.saturating_sub(2) as usize)),
+                format!(
+                    " {}",
+                    trunc(&lyric, rows[2].width.saturating_sub(2) as usize)
+                ),
                 t::accent(),
             )),
         ]),
@@ -386,7 +399,11 @@ fn draw_queue(f: &mut Frame, area: Rect, app: &App) {
 
 fn draw_play_body(f: &mut Frame, area: Rect, app: &App) {
     // 封面最多占一半宽度；由内嵌 PNG 按当前区域实时渲染，任何尺寸比例都正确。
-    let art = logo::render(area.width / 2, area.height.saturating_sub(2), app.logo_ascii);
+    let art = logo::render(
+        area.width / 2,
+        area.height.saturating_sub(2),
+        app.logo_ascii,
+    );
     let art_w = logo::art_width(&art);
     let cover_w = if art_w > 0 && area.width >= art_w + 40 {
         art_w + 6
@@ -482,7 +499,10 @@ fn draw_lyrics(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::raw("  "),
-            Span::styled(trunc(&artist, area.width.saturating_sub(4) as usize), t::dim()),
+            Span::styled(
+                trunc(&artist, area.width.saturating_sub(4) as usize),
+                t::dim(),
+            ),
         ])),
         rows[2],
     );
@@ -495,8 +515,8 @@ fn draw_lyrics(f: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(Span::styled("  （暂无歌词）", t::faint())));
     } else {
         // n 行歌词 + (n-1) 空行 = 2n-1 ≤ h，n 取奇数且 ≤ 5
-        let mut n = ((h + 1) / 2).min(5);
-        if n % 2 == 0 {
+        let mut n = h.div_ceil(2).min(5);
+        if n.is_multiple_of(2) {
             n -= 1;
         }
         let n = n.max(1);
@@ -573,9 +593,10 @@ fn draw_player(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(head).style(t::player_strip()), rows[0]);
 
     // 进度：时间 ─ 进度条 ─ 时间 ─ 模式
-    let tail: Vec<Span> = vec![
-        Span::styled(format!("   模式 {}  ", app.queue.mode.label()), t::dim()),
-    ];
+    let tail: Vec<Span> = vec![Span::styled(
+        format!("   模式 {}  ", app.queue.mode.label()),
+        t::dim(),
+    )];
     let tail_w: usize = tail.iter().map(|s| s.width()).sum();
     let time_w = 6 + 6 + 1;
     let bar_w = (rows[1].width as usize).saturating_sub(tail_w + time_w + 2);
@@ -723,9 +744,7 @@ fn window_start(cursor: usize, total: usize, view_h: usize) -> usize {
     if total <= view_h || view_h == 0 {
         return 0;
     }
-    cursor
-        .saturating_sub(view_h / 2)
-        .min(total - view_h)
+    cursor.saturating_sub(view_h / 2).min(total - view_h)
 }
 
 fn render_list(f: &mut Frame, area: Rect, items: Vec<ListItem>, cursor: usize) {
@@ -733,13 +752,7 @@ fn render_list(f: &mut Frame, area: Rect, items: Vec<ListItem>, cursor: usize) {
     render_list_at(f, area, items, cursor, start);
 }
 
-fn render_list_at(
-    f: &mut Frame,
-    area: Rect,
-    items: Vec<ListItem>,
-    cursor: usize,
-    start: usize,
-) {
+fn render_list_at(f: &mut Frame, area: Rect, items: Vec<ListItem>, cursor: usize, start: usize) {
     let mut state = ListState::default();
     state.select(Some(cursor));
     *state.offset_mut() = start;

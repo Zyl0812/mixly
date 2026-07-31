@@ -26,11 +26,45 @@ pub struct TrackSource {
 }
 
 pub type RefreshHook = Arc<dyn Fn() -> RefreshFuture + Send + Sync>;
-pub type RefreshFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>;
+pub type RefreshFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send>>;
+
+#[derive(Clone)]
+struct ActiveTrack {
+    source: TrackSource,
+    cache: Option<Arc<TempCacheFile>>,
+}
+
+impl ActiveTrack {
+    fn new(source: TrackSource, previous: Option<&Self>) -> Self {
+        let cache = previous
+            .filter(|old| old.source.local_cache == source.local_cache)
+            .and_then(|old| old.cache.clone())
+            .or_else(|| TempCacheFile::for_track(&source));
+        Self { source, cache }
+    }
+}
+
+struct TempCacheFile(PathBuf);
+
+impl TempCacheFile {
+    fn for_track(track: &TrackSource) -> Option<Arc<Self>> {
+        if !track.platform.is_online() {
+            return None;
+        }
+        track.local_cache.clone().map(|path| Arc::new(Self(path)))
+    }
+}
+
+impl Drop for TempCacheFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
 
 #[derive(Default)]
 struct RelayState {
-    current: Option<TrackSource>,
+    current: Option<ActiveTrack>,
 }
 
 #[derive(Clone)]
@@ -86,7 +120,8 @@ impl AudioRelay {
 
     pub async fn set_track(&self, track: TrackSource) {
         let mut g = self.state.lock().await;
-        g.current = Some(track);
+        let current = ActiveTrack::new(track, g.current.as_ref());
+        g.current = Some(current);
     }
 }
 
@@ -160,16 +195,26 @@ async fn handle_conn(
     }
     let range = req_headers.get("range").cloned();
 
-    let track = {
+    let current = {
         let g = state.lock().await;
         g.current.clone()
     };
-    let Some(mut track) = track else {
+    let Some(current) = current else {
         write_simple(&mut stream, 404, "Not Found", b"no current track").await?;
         return Ok(());
     };
+    let mut track = current.source;
+    let _cache_guard = current.cache;
 
-    match proxy_stream(&mut stream, &client, &track, range.as_deref(), method == "HEAD").await {
+    match proxy_stream(
+        &mut stream,
+        &client,
+        &track,
+        range.as_deref(),
+        method == "HEAD",
+    )
+    .await
+    {
         Ok(()) => Ok(()),
         Err(e) => {
             // One refresh retry on failure (expired link / 403).
@@ -181,7 +226,7 @@ async fn handle_conn(
                         {
                             let mut g = state.lock().await;
                             if let Some(cur) = g.current.as_mut() {
-                                cur.url = new_url;
+                                cur.source.url = new_url;
                             }
                         }
                         proxy_stream(
@@ -216,7 +261,10 @@ async fn proxy_stream(
 
     let mut headers = cdn_headers(track.platform);
     if let Some(r) = range {
-        headers.insert(RANGE, HeaderValue::from_str(r).unwrap_or(HeaderValue::from_static("bytes=0-")));
+        headers.insert(
+            RANGE,
+            HeaderValue::from_str(r).unwrap_or(HeaderValue::from_static("bytes=0-")),
+        );
     }
 
     let resp = client
@@ -348,12 +396,7 @@ async fn serve_local_file(
     Ok(())
 }
 
-async fn write_simple(
-    stream: &mut TcpStream,
-    code: u16,
-    reason: &str,
-    body: &[u8],
-) -> Result<()> {
+async fn write_simple(stream: &mut TcpStream, code: u16, reason: &str, body: &[u8]) -> Result<()> {
     let resp = format!(
         "HTTP/1.1 {code} {reason}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
@@ -362,6 +405,10 @@ async fn write_simple(
     stream.write_all(body).await?;
     stream.flush().await?;
     Ok(())
+}
+
+fn range_not_satisfiable(total_len: u64) -> (u16, Option<String>, u64, u64) {
+    (416, Some(format!("bytes */{total_len}")), 0, 0)
 }
 
 /// Pure helper used by tests: build response metadata for a Range request against a known buffer.
@@ -374,28 +421,47 @@ pub fn range_response_meta(
     let Some(range) = range_header else {
         return (200, None, 0, total_len);
     };
-    let range = range.trim();
-    let rest = range
-        .strip_prefix("bytes=")
-        .unwrap_or(range);
-    let (start_s, end_s) = rest.split_once('-').unwrap_or((rest, ""));
-    let start: u64 = start_s.parse().unwrap_or(0);
-    let end: u64 = if end_s.is_empty() {
-        total_len.saturating_sub(1)
-    } else {
-        end_s
-            .parse::<u64>()
-            .unwrap_or(total_len.saturating_sub(1))
-            .min(total_len.saturating_sub(1))
-    };
-    if start >= total_len {
-        return (
-            416,
-            Some(format!("bytes */{total_len}")),
-            0,
-            0,
-        );
+    if total_len == 0 {
+        return range_not_satisfiable(total_len);
     }
+
+    let range = range.trim();
+    let Some(rest) = range.strip_prefix("bytes=") else {
+        return range_not_satisfiable(total_len);
+    };
+    if rest.contains(',') {
+        return range_not_satisfiable(total_len);
+    }
+    let Some((start_s, end_s)) = rest.split_once('-') else {
+        return range_not_satisfiable(total_len);
+    };
+
+    let (start, end) = if start_s.is_empty() {
+        let Ok(suffix_len) = end_s.parse::<u64>() else {
+            return range_not_satisfiable(total_len);
+        };
+        if suffix_len == 0 {
+            return range_not_satisfiable(total_len);
+        }
+        (total_len.saturating_sub(suffix_len), total_len - 1)
+    } else {
+        let Ok(start) = start_s.parse::<u64>() else {
+            return range_not_satisfiable(total_len);
+        };
+        let end = if end_s.is_empty() {
+            total_len - 1
+        } else {
+            let Ok(end) = end_s.parse::<u64>() else {
+                return range_not_satisfiable(total_len);
+            };
+            end.min(total_len - 1)
+        };
+        (start, end)
+    };
+    if start >= total_len || end < start {
+        return range_not_satisfiable(total_len);
+    }
+
     let length = end - start + 1;
     (
         206,
@@ -436,6 +502,51 @@ mod tests {
         assert_eq!((start, len), (10, 10));
     }
 
+    #[test]
+    fn range_meta_suffix_and_invalid_ranges() {
+        let (st, cr, start, len) = range_response_meta(1000, Some("bytes=-100"));
+        assert_eq!(st, 206);
+        assert_eq!(cr.as_deref(), Some("bytes 900-999/1000"));
+        assert_eq!((start, len), (900, 100));
+
+        for invalid in ["bytes=100-50", "bytes=abc-", "items=0-1", "bytes=0-1,3-4"] {
+            let (st, cr, _, len) = range_response_meta(1000, Some(invalid));
+            assert_eq!(st, 416, "expected 416 for {invalid}");
+            assert_eq!(cr.as_deref(), Some("bytes */1000"));
+            assert_eq!(len, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn replacing_track_cleans_prefetch_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("track.bin");
+        std::fs::write(&cache, b"audio").unwrap();
+        let relay = AudioRelay {
+            state: Arc::new(Mutex::new(RelayState::default())),
+            port: 0,
+        };
+
+        relay
+            .set_track(TrackSource {
+                url: "cached".into(),
+                platform: Platform::Qq,
+                refresh: None,
+                local_cache: Some(cache.clone()),
+            })
+            .await;
+        relay
+            .set_track(TrackSource {
+                url: "online".into(),
+                platform: Platform::Qq,
+                refresh: None,
+                local_cache: None,
+            })
+            .await;
+
+        assert!(!cache.exists());
+    }
+
     /// Integration: real relay request path against a local mock CDN.
     #[tokio::test]
     async fn relay_range_returns_206() {
@@ -458,10 +569,7 @@ mod tests {
             sock.write_all(payload).await.unwrap();
         });
 
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .build()
-            .unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let relay = AudioRelay::start(client).await.unwrap();
         relay
             .set_track(TrackSource {
@@ -475,9 +583,7 @@ mod tests {
         let mut sock = TcpStream::connect(format!("127.0.0.1:{}", relay.port()))
             .await
             .unwrap();
-        let req = format!(
-            "GET /current HTTP/1.1\r\nHost: 127.0.0.1\r\nRange: bytes=100-\r\nConnection: close\r\n\r\n"
-        );
+        let req = "GET /current HTTP/1.1\r\nHost: 127.0.0.1\r\nRange: bytes=100-\r\nConnection: close\r\n\r\n";
         sock.write_all(req.as_bytes()).await.unwrap();
         let mut resp = Vec::new();
         sock.read_to_end(&mut resp).await.unwrap();
@@ -488,7 +594,8 @@ mod tests {
             text.lines().next().unwrap_or("")
         );
         assert!(
-            text.to_ascii_lowercase().contains("content-range: bytes 100-999/1000"),
+            text.to_ascii_lowercase()
+                .contains("content-range: bytes 100-999/1000"),
             "missing content-range: {text}"
         );
         assert!(

@@ -17,7 +17,7 @@ use super::ui;
 use crate::api::ApiClient;
 use crate::config::ProxyDecision;
 use crate::lyrics::lyrics_state_from_lrc;
-use crate::models::{LyricsState, Platform, Playlist, Quality, Song};
+use crate::models::{LyricsState, Platform, PlayMode, Playlist, Quality, Song};
 use crate::player::{MpvPlayer, PlaybackSnapshot};
 use crate::playlist::{PlayQueue, PlaylistStore};
 use crate::relay::AudioRelay;
@@ -166,14 +166,17 @@ async fn run_loop(
             }
         }
         if should_load_next {
-            if let Err(e) = load_current(app, deps).await {
+            if let Err(e) = load_after_eof(app, deps).await {
                 app.error = Some(e.to_string());
             }
         }
 
         terminal.draw(|f| ui::draw(f, app))?;
 
-        let Some(ev) = poll_event(Duration::from_millis(200), app.input_mode == InputMode::Search)?
+        let Some(ev) = poll_event(
+            Duration::from_millis(200),
+            app.input_mode == InputMode::Search,
+        )?
         else {
             continue;
         };
@@ -407,6 +410,27 @@ async fn run_loop(
     Ok(())
 }
 
+async fn load_after_eof(app: &mut App, deps: &TuiDeps) -> Result<()> {
+    let attempts = app.queue.len().max(1);
+    let mut last_error = None;
+    for attempt in 0..attempts {
+        match load_current(app, deps).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt + 1 == attempts || !advance_after_load_failure(&mut app.queue) {
+                    break;
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("播放队列没有可加载的歌曲")))
+}
+
+fn advance_after_load_failure(queue: &mut PlayQueue) -> bool {
+    queue.mode != PlayMode::LoopOne && queue.advance()
+}
+
 async fn search_all(api: &ApiClient, keyword: &str, prefer: Platform) -> Result<Vec<Song>> {
     let order = match prefer {
         Platform::Qq | Platform::Local => [Platform::Qq, Platform::Netease],
@@ -460,6 +484,14 @@ async fn load_current(app: &mut App, deps: &TuiDeps) -> Result<()> {
     // 缺专辑等元数据时按歌曲所属平台补全，并写回队列供播放条/列表展示
     song = deps.api.enrich_song_metadata(&song).await;
     app.queue.update_current(song.clone());
+    match deps.store.backfill_album(&song) {
+        Ok(true) => match deps.store.list() {
+            Ok(playlists) => app.playlists = playlists,
+            Err(e) => warn!(error = %e, "reload playlists after album backfill failed"),
+        },
+        Ok(false) => {}
+        Err(e) => warn!(error = %e, "persist enriched album failed"),
+    }
 
     app.status_message = format!("加载中 {}", song.name);
     let track = deps
@@ -496,5 +528,29 @@ mod tests {
     fn view_mode_toggles() {
         assert_eq!(ViewMode::List.toggled(), ViewMode::Play);
         assert_eq!(ViewMode::Play.toggled(), ViewMode::List);
+    }
+
+    #[test]
+    fn failed_track_skips_sequential_but_not_loop_one() {
+        fn song(id: &str) -> Song {
+            Song {
+                platform: Platform::Qq,
+                id: id.into(),
+                name: id.into(),
+                artists: vec![],
+                album: None,
+                duration_ms: None,
+                cover_url: None,
+            }
+        }
+
+        let mut sequential = PlayQueue::from_songs(vec![song("a"), song("b")]);
+        assert!(advance_after_load_failure(&mut sequential));
+        assert_eq!(sequential.current().map(|song| song.id.as_str()), Some("b"));
+
+        let mut loop_one = PlayQueue::from_songs(vec![song("a")]);
+        loop_one.set_mode(PlayMode::LoopOne);
+        assert!(!advance_after_load_failure(&mut loop_one));
+        assert_eq!(loop_one.current().map(|song| song.id.as_str()), Some("a"));
     }
 }

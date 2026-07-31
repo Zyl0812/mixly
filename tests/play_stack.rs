@@ -26,7 +26,10 @@ async fn play_stack_qq_or_netease() {
         },
     };
 
-    println!("using {platform}/{id} url_prefix={}", &url[..url.len().min(40)]);
+    println!(
+        "using {platform}/{id} url_prefix={}",
+        &url[..url.len().min(40)]
+    );
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))

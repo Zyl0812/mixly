@@ -136,7 +136,7 @@ skill 里写清楚了这些规矩，所以 agent 不会瞎搞：
 ```toml
 [general]
 quality = "Exhigh"          # Standard | Higher | Exhigh | Lossless
-default_platform = "all"
+preferred_platform = "qq"
 
 [proxy]
 enabled = false
@@ -156,12 +156,12 @@ mpv_path = "mpv"
 
 音频固定走 mixly 的本地中继（`127.0.0.1:<随机端口>/current`），所以即使 mpv / FFmpeg 本身不支持 SOCKS，SOCKS5 和 HTTPS CDN 也能正常工作。
 
-**注意：** `netease-qq-music-api` 0.1.0 内部的 `reqwest::Client` 是用 `.no_proxy()` 构建的，所以在该 crate 修改之前，`ALL_PROXY` **不会**影响上游 API 请求。音频中继（我们自己的 client）仍然遵循代理设置——这才是校园网 SOCKS + HTTPS CDN 场景下的关键路径。
+API 客户端与音频中继读取同一套代理设置。项目对锁定的 `netease-qq-music-api` 0.1.0 做了最小本地补丁，移除了其内部客户端的强制 `.no_proxy()`。
 
 ## 架构（简述）
 
 1. **API** —— `netease-qq-music-api =0.1.0`，隔离在 `src/api/client.rs`
-2. **API 代理** —— 在 Tokio 启动前注入 `ALL_PROXY`；Cargo 会把 `reqwest` 与 `socks` 特性统一
+2. **API 代理** —— 在 Tokio 启动前注入 `ALL_PROXY`；本地补丁让上游 API 客户端遵循该设置
 3. **音频代理** —— 本地 HTTP 中继用 reqwest 拉 CDN 流（Range / Referer / 链接刷新）
 4. **播放** —— mpv JSON IPC（`interprocess` 本地套接字 / Windows 命名管道）
 5. **播放队列** —— 由 mixly 自己维护（每首歌一次 `loadfile`，因为链接会过期）

@@ -4,13 +4,14 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use mixly::cli::{
-    Cli, Commands, ConfigCmd, LocalCmd, LoginPlatform, PlaylistCmd, PlatformArg, PreferArg,
+    Cli, Commands, ConfigCmd, LocalCmd, LoginPlatform, PlatformArg, PlaylistCmd, PreferArg,
+};
+use mixly::config::{
+    default_mpv_socket_path, inject_proxy_env, load_config, mask_proxy_url,
+    preferred_platform_from_config, quality_from_config, resolve_proxy, save_config, AppPaths,
+    ProxyDecision,
 };
 use mixly::local::{song_for_play_path, LocalLibrary};
-use mixly::config::{
-    default_mpv_socket_path, inject_proxy_env, load_config, preferred_platform_from_config,
-    quality_from_config, resolve_proxy, save_config, AppPaths, ProxyDecision,
-};
 use mixly::lyrics::lyrics_state_from_lrc;
 use mixly::player::MpvPlayer;
 use mixly::playlist::{PlayQueue, PlaylistStore};
@@ -103,16 +104,7 @@ async fn async_main(
             playlist,
         } => {
             cmd_play_resolve(
-                api,
-                &store,
-                &paths,
-                &cfg,
-                targets,
-                r#loop,
-                random,
-                platform,
-                playlist,
-                prefer,
+                api, &store, &paths, &cfg, targets, r#loop, random, platform, playlist, prefer,
             )
             .await
         }
@@ -197,7 +189,8 @@ fn cmd_config(paths: &AppPaths, mut cfg: mixly::Config, action: ConfigCmd) -> Re
             );
             println!(
                 "代理: enabled={} url={}",
-                cfg.proxy.enabled, cfg.proxy.url
+                cfg.proxy.enabled,
+                mask_proxy_url(&cfg.proxy.url)
             );
             println!("mpv: {}", cfg.player.mpv_path);
         }
@@ -232,10 +225,7 @@ async fn cmd_search(
     prefer: Platform,
 ) -> Result<()> {
     if matches!(platform, PlatformArg::All) {
-        println!(
-            "搜索范围: 本地 + 在线（在线优先 {}）",
-            prefer.label_zh()
-        );
+        println!("搜索范围: 本地 + 在线（在线优先 {}）", prefer.label_zh());
     }
     let mut any = false;
 
@@ -294,6 +284,7 @@ async fn spawn_player(cfg: &mixly::Config) -> Result<MpvPlayer> {
 /// - `play netease|qq|local <id或路径>` → 精确播
 /// - `play "歌名"` → 搜索后播
 /// - `play "歌单名"` / 已有本地文件路径
+#[allow(clippy::too_many_arguments)]
 async fn cmd_play_resolve(
     api: ApiClient,
     store: &PlaylistStore,
@@ -321,11 +312,19 @@ async fn cmd_play_resolve(
             } else {
                 PlayMode::Sequential
             };
-            return play_songs(api, cfg, vec![song], mode).await;
+            return play_songs(api, cfg, vec![song], mode, None).await;
         }
         let keyword = targets.join(" ");
-        return play_by_search(api, cfg, &keyword, search_platform, prefer, loop_flag, random)
-            .await;
+        return play_by_search(
+            api,
+            cfg,
+            &keyword,
+            search_platform,
+            prefer,
+            loop_flag,
+            random,
+        )
+        .await;
     }
 
     let name = targets
@@ -347,7 +346,7 @@ async fn cmd_play_resolve(
         } else {
             PlayMode::Sequential
         };
-        return play_songs(api, cfg, vec![song], mode).await;
+        return play_songs(api, cfg, vec![song], mode, None).await;
     }
 
     // 优先本地歌单
@@ -435,7 +434,7 @@ async fn play_local_playlist(
     } else {
         println!("播放歌单「{}」（{} 首）", pl.name, songs.len());
     }
-    play_songs(api, cfg, songs, mode).await
+    play_songs(api, cfg, songs, mode, Some(store)).await
 }
 
 async fn play_by_search(
@@ -486,7 +485,7 @@ async fn play_by_search(
     } else {
         PlayMode::Sequential
     };
-    play_songs(api, cfg, vec![song], mode).await
+    play_songs(api, cfg, vec![song], mode, None).await
 }
 
 async fn play_songs(
@@ -494,6 +493,7 @@ async fn play_songs(
     cfg: &mixly::Config,
     songs: Vec<Song>,
     mode: PlayMode,
+    store: Option<&PlaylistStore>,
 ) -> Result<()> {
     if songs.is_empty() {
         bail!("没有可播放的歌曲");
@@ -516,13 +516,15 @@ async fn play_songs(
     let mut prefetch_job: Option<PrefetchJob> = None;
     let mut ready_prefetch: Option<PrefetchedTrack> = None;
 
-    loop {
-        let Some(mut song) = queue.current().cloned() else {
-            break;
-        };
-        // 歌单/旧条目可能缺专辑：播放前按平台补全（仅内存，不写回磁盘）
+    while let Some(mut song) = queue.current().cloned() {
+        // 歌单/旧条目可能缺专辑：播放前按平台补全，并回写本地歌单。
         song = api.enrich_song_metadata(&song).await;
         queue.update_current(song.clone());
+        if let Some(store) = store {
+            if let Err(e) = store.backfill_album(&song) {
+                warn!(error = %e, "persist enriched album failed");
+            }
+        }
         println!("→ {}", song.display_line());
 
         // 若预取完成且就是本曲，用缓存；否则实时拉流
@@ -552,8 +554,7 @@ async fn play_songs(
             }
         }
 
-        if let Err(e) =
-            load_into_player(api.clone(), &relay, &mut player, &song, prefetched).await
+        if let Err(e) = load_into_player(api.clone(), &relay, &mut player, &song, prefetched).await
         {
             eprintln!("播放错误: {e:#}");
             if mode == PlayMode::LoopOne {
@@ -595,18 +596,14 @@ async fn play_songs(
                     {
                         if let Some(next) = queue.peek_next().cloned() {
                             log_prefetch_start(&next);
-                            prefetch_job = Some(PrefetchJob::spawn(
-                                api.clone(),
-                                client.clone(),
-                                next,
-                            ));
+                            prefetch_job =
+                                Some(PrefetchJob::spawn(api.clone(), client.clone(), next));
                             prefetch_started = true;
                         }
                     }
 
                     // 预取已完成则收进 ready，避免 join 阻塞在切歌瞬间
-                    if let Some(res) = mixly::prefetch::try_take_finished(&mut prefetch_job).await
-                    {
+                    if let Some(res) = mixly::prefetch::try_take_finished(&mut prefetch_job).await {
                         match res {
                             Ok(p) => ready_prefetch = Some(p),
                             Err(e) => log_prefetch_fail(&e),
@@ -633,10 +630,7 @@ async fn play_songs(
     if let Some(job) = prefetch_job.take() {
         job.abort();
     }
-    if let Some(p) = ready_prefetch.take() {
-        p.cleanup();
-        std::mem::forget(p); // cleanup 已删文件，避免 Drop 再删一次噪音
-    }
+    drop(ready_prefetch.take());
 
     let _ = player.shutdown().await;
     Ok(())
@@ -650,13 +644,10 @@ async fn load_into_player(
     prefetched: Option<PrefetchedTrack>,
 ) -> Result<()> {
     let track = if let Some(p) = prefetched {
-        // 防止 Drop 再删；播放期间文件仍由中继读取
-        let track = p.track.clone();
-        std::mem::forget(p);
-        track
+        p.into_track()
     } else {
         let t = api.resolve_track(song).await?;
-        debug_assert!(t.refresh.is_some());
+        debug_assert!(!song.platform.is_online() || t.refresh.is_some());
         t
     };
     relay.set_track(track).await;

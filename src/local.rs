@@ -29,8 +29,8 @@ impl LocalLibrary {
         paths.ensure()?;
         let path = paths.local_library.clone();
         let songs = if path.exists() {
-            let text = fs::read_to_string(&path)
-                .with_context(|| format!("read {}", path.display()))?;
+            let text =
+                fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
             let file: LibraryFile =
                 serde_json::from_str(&text).context("parse local_library.json")?;
             file.songs
@@ -144,10 +144,7 @@ impl LocalLibrary {
         let pos = self
             .songs
             .iter()
-            .position(|s| {
-                s.id == id_or_path
-                    || canon.as_ref().map(|c| s.id == *c).unwrap_or(false)
-            })
+            .position(|s| s.id == id_or_path || canon.as_ref().map(|c| s.id == *c).unwrap_or(false))
             .with_context(|| format!("本地库中未找到: {id_or_path}"))?;
         let song = self.songs.remove(pos);
         self.save()?;
