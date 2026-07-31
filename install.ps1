@@ -35,3 +35,8 @@ if (-not (Get-Command mpv -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host "==> installed: $Dest\mixly.exe"
+Write-Host ''
+Write-Host 'Optional agent integration:'
+Write-Host '  mixly skill install claude --global'
+Write-Host '  mixly skill install codex --global'
+Write-Host '  mixly skill install grok --global'

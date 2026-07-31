@@ -5,6 +5,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use mixly::cli::{
     Cli, Commands, ConfigCmd, LocalCmd, LoginPlatform, PlatformArg, PlaylistCmd, PreferArg,
+    SkillCmd,
 };
 use mixly::config::{
     default_mpv_socket_path, inject_proxy_env, load_config, mask_proxy_url,
@@ -19,6 +20,7 @@ use mixly::prefetch::{
     log_prefetch_fail, log_prefetch_start, should_prefetch, PrefetchJob, PrefetchedTrack,
 };
 use mixly::relay::AudioRelay;
+use mixly::skill::{install_skill, skill_file_path, uninstall_skill, SkillScope};
 use mixly::tui::run_tui;
 use mixly::{ApiClient, Platform, PlayMode, Song};
 use tokio::sync::Mutex;
@@ -26,6 +28,14 @@ use tracing::warn;
 
 fn main() {
     let cli = Cli::parse();
+
+    if let Commands::Skill { action } = &cli.command {
+        if let Err(e) = cmd_skill(action) {
+            eprintln!("错误: {e:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
 
     let paths = match AppPaths::discover() {
         Ok(p) => p,
@@ -121,6 +131,61 @@ async fn async_main(
         Commands::Local { action } => cmd_local(&paths, &store, action),
         Commands::Tui => cmd_tui(api, store, &cfg, proxy, prefer).await,
         Commands::Config { action } => cmd_config(&paths, cfg, action),
+        Commands::Skill { .. } => unreachable!("skill command handled before runtime setup"),
+    }
+}
+
+fn cmd_skill(action: &SkillCmd) -> Result<()> {
+    match action {
+        SkillCmd::Install {
+            agent,
+            global,
+            project,
+            force,
+        } => {
+            let scope = skill_scope(*global, *project);
+            let (path, changed) = install_skill(*agent, scope, *force)?;
+            if changed {
+                println!("Installed mixly skill to:");
+            } else {
+                println!("Mixly skill is already installed at:");
+            }
+            println!("{}", path.display());
+            println!("Restart the agent if the skill is not detected automatically.");
+        }
+        SkillCmd::Uninstall {
+            agent,
+            global,
+            project,
+            force,
+        } => {
+            let scope = skill_scope(*global, *project);
+            let (path, changed) = uninstall_skill(*agent, scope, *force)?;
+            if changed {
+                println!("Removed mixly skill from:");
+            } else {
+                println!("Mixly skill is not installed at:");
+            }
+            println!("{}", path.display());
+        }
+        SkillCmd::Path {
+            agent,
+            global,
+            project,
+        } => println!(
+            "{}",
+            skill_file_path(*agent, skill_scope(*global, *project))?.display()
+        ),
+    }
+    Ok(())
+}
+
+fn skill_scope(global: bool, project: bool) -> SkillScope {
+    debug_assert!(global ^ project);
+    if global {
+        SkillScope::Global
+    } else {
+        SkillScope::Project
     }
 }
 

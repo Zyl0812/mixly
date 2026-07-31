@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
+use crate::skill::SkillAgent;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "mixly",
@@ -156,6 +158,66 @@ pub enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigCmd,
+    },
+    /// 安装或移除 AI Agent Skill
+    Skill {
+        #[command(subcommand)]
+        action: SkillCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SkillCmd {
+    /// 安装内嵌的 mixly Skill
+    #[command(group(
+        clap::ArgGroup::new("scope")
+            .required(true)
+            .multiple(false)
+            .args(["global", "project"])
+    ))]
+    Install {
+        #[arg(value_enum)]
+        agent: SkillAgent,
+        #[arg(long)]
+        global: bool,
+        #[arg(long)]
+        project: bool,
+        /// 覆盖内容不同的现有 Skill
+        #[arg(long)]
+        force: bool,
+    },
+    /// 卸载 mixly Skill
+    #[command(group(
+        clap::ArgGroup::new("scope")
+            .required(true)
+            .multiple(false)
+            .args(["global", "project"])
+    ))]
+    Uninstall {
+        #[arg(value_enum)]
+        agent: SkillAgent,
+        #[arg(long)]
+        global: bool,
+        #[arg(long)]
+        project: bool,
+        /// 删除已被修改的 Skill
+        #[arg(long)]
+        force: bool,
+    },
+    /// 显示 Skill 的安装路径
+    #[command(group(
+        clap::ArgGroup::new("scope")
+            .required(true)
+            .multiple(false)
+            .args(["global", "project"])
+    ))]
+    Path {
+        #[arg(value_enum)]
+        agent: SkillAgent,
+        #[arg(long)]
+        global: bool,
+        #[arg(long)]
+        project: bool,
     },
 }
 

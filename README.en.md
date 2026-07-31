@@ -90,18 +90,30 @@ mixly ships [`skills/mixly/SKILL.md`](skills/mixly/SKILL.md). Drop it into an AI
 (Claude Code, Codex, Grok, …) and you can drive the player in plain language — the agent runs the same
 `mixly` commands under the hood and never touches mixly's source.
 
-Install by copying or symlinking the directory into your tool's skill folder:
+The Skill is embedded in `mixly.exe`, so no repository clone or manual copy is needed. Install it for every project:
 
-```bash
-# Claude Code (project-level)
-mkdir -p .claude/skills && cp -r skills/mixly .claude/skills/
-
-# Claude Code (global, available in every project)
-mkdir -p ~/.claude/skills && cp -r skills/mixly ~/.claude/skills/
-
-# Grok CLI
-mkdir -p .grok/skills && cp -r skills/mixly .grok/skills/
+```powershell
+mixly skill install claude --global
+mixly skill install codex --global
+mixly skill install grok --global
 ```
+
+Or install it only in the current directory:
+
+```powershell
+mixly skill install claude --project
+mixly skill install codex --project
+mixly skill install grok --project
+```
+
+Inspect the target path or uninstall:
+
+```powershell
+mixly skill path codex --global
+mixly skill uninstall codex --global
+```
+
+Install and uninstall refuse to replace a modified file; pass `--force` only when you intend to overwrite or remove it. Install only for the agents you use, and restart the agent if it does not detect the new Skill automatically.
 
 Then just ask:
 

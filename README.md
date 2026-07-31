@@ -91,18 +91,30 @@ mixly --proxy socks5://127.0.0.1:7890 search "test"
 mixly 自带一份 [`skills/mixly/SKILL.md`](skills/mixly/SKILL.md)，装进 AI 编码助手（Claude Code、Codex、Grok 等）后，
 你就可以用大白话让它替你操作播放器——它在背后调的还是同一个 `mixly` 命令，不碰源码。
 
-安装：把这个目录复制或软链到你的工具的 skill 目录。
+Skill 已编译进 `mixly.exe`，无需克隆仓库或手动复制。安装到用户目录（所有项目可用）：
 
-```bash
-# Claude Code（项目级）
-mkdir -p .claude/skills && cp -r skills/mixly .claude/skills/
-
-# Claude Code（全局，所有项目可用）
-mkdir -p ~/.claude/skills && cp -r skills/mixly ~/.claude/skills/
-
-# Grok CLI
-mkdir -p .grok/skills && cp -r skills/mixly .grok/skills/
+```powershell
+mixly skill install claude --global
+mixly skill install codex --global
+mixly skill install grok --global
 ```
+
+只安装到当前目录：
+
+```powershell
+mixly skill install claude --project
+mixly skill install codex --project
+mixly skill install grok --project
+```
+
+查看路径或卸载：
+
+```powershell
+mixly skill path codex --global
+mixly skill uninstall codex --global
+```
+
+若目标文件已被修改，安装或卸载会拒绝操作；确认覆盖或删除时加 `--force`。只需为实际使用的 Agent 安装，安装后若未自动识别，请重启 Agent。
 
 装好之后直接说人话就行：
 
