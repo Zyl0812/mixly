@@ -119,6 +119,8 @@ Then just ask:
 
 > "Play 晴天 by Jay Chou" → the agent runs `search`, picks a hit, backgrounds `play`, and tells you what's on
 >
+> "I don't know what to listen to—play me something" → the agent uses recent context and existing playlists to recommend one new song, verifies the official version, and plays it in the background
+>
 > "Make a playlist called Commute with these five songs" → `playlist create` + `search` / `add` per track, then `show` to confirm
 >
 > "Import the music folder on my D: drive" → `local import`

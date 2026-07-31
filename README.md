@@ -120,6 +120,8 @@ mixly skill uninstall codex --global
 
 > 「放首周杰伦的晴天」→ agent 自动 `search` → 挑一条 → 后台 `play`，然后告诉你在放哪首
 >
+> 「不知道听什么，随便放一首」→ agent 结合最近对话和已有歌单推荐一首新歌，验证正式版本后后台播放
+>
 > 「建个叫『通勤』的歌单，把这五首加进去」→ `playlist create` + 逐首 `search` / `add`，最后 `show` 给你确认
 >
 > 「把我 D 盘那个音乐文件夹导进来」→ `local import`
