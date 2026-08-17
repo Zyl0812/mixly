@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
@@ -33,15 +34,20 @@ pub type RefreshFuture =
 struct ActiveTrack {
     source: TrackSource,
     cache: Option<Arc<TempCacheFile>>,
+    generation: u64,
 }
 
 impl ActiveTrack {
-    fn new(source: TrackSource, previous: Option<&Self>) -> Self {
+    fn new(source: TrackSource, previous: Option<&Self>, generation: u64) -> Self {
         let cache = previous
             .filter(|old| old.source.local_cache == source.local_cache)
             .and_then(|old| old.cache.clone())
             .or_else(|| TempCacheFile::for_track(&source));
-        Self { source, cache }
+        Self {
+            source,
+            cache,
+            generation,
+        }
     }
 }
 
@@ -70,6 +76,7 @@ struct RelayState {
 #[derive(Clone)]
 pub struct AudioRelay {
     state: Arc<Mutex<RelayState>>,
+    generation: Arc<AtomicU64>,
     port: u16,
 }
 
@@ -83,6 +90,7 @@ impl AudioRelay {
         let state = Arc::new(Mutex::new(RelayState::default()));
         let relay = Self {
             state: state.clone(),
+            generation: Arc::new(AtomicU64::new(0)),
             port,
         };
         let serve_client = client;
@@ -115,14 +123,28 @@ impl AudioRelay {
     }
 
     pub fn current_url(&self) -> String {
-        format!("http://127.0.0.1:{}/current", self.port)
+        format!(
+            "http://127.0.0.1:{}/current?track={}",
+            self.port,
+            self.generation.load(Ordering::Acquire)
+        )
     }
 
     pub async fn set_track(&self, track: TrackSource) {
         let mut g = self.state.lock().await;
-        let current = ActiveTrack::new(track, g.current.as_ref());
+        let generation = self.generation.load(Ordering::Relaxed).wrapping_add(1);
+        let current = ActiveTrack::new(track, g.current.as_ref(), generation);
         g.current = Some(current);
+        self.generation.store(generation, Ordering::Release);
     }
+}
+
+fn request_generation(path: &str) -> Option<u64> {
+    path.strip_prefix("/current?track=")?
+        .split('&')
+        .next()?
+        .parse()
+        .ok()
 }
 
 /// CDN 反盗链要求的 Referer + 浏览器 UA（中继与预取共用）。
@@ -179,10 +201,10 @@ async fn handle_conn(
         write_simple(&mut stream, 405, "Method Not Allowed", b"").await?;
         return Ok(());
     }
-    if path != "/current" && !path.starts_with("/current?") {
+    let Some(requested_generation) = request_generation(path) else {
         write_simple(&mut stream, 404, "Not Found", b"no track").await?;
         return Ok(());
-    }
+    };
 
     let mut req_headers = HashMap::new();
     for line in lines {
@@ -203,6 +225,11 @@ async fn handle_conn(
         write_simple(&mut stream, 404, "Not Found", b"no current track").await?;
         return Ok(());
     };
+    if current.generation != requested_generation {
+        write_simple(&mut stream, 410, "Gone", b"stale track").await?;
+        return Ok(());
+    }
+    let generation = current.generation;
     let mut track = current.source;
     let _cache_guard = current.cache;
 
@@ -217,17 +244,39 @@ async fn handle_conn(
     {
         Ok(()) => Ok(()),
         Err(e) => {
+            let still_current = state
+                .lock()
+                .await
+                .current
+                .as_ref()
+                .is_some_and(|current| current.generation == generation);
+            if !still_current {
+                debug!(generation, "discarding stale relay request");
+                write_simple(&mut stream, 410, "Gone", b"stale track").await?;
+                return Ok(());
+            }
             // One refresh retry on failure (expired link / 403).
             warn!(error = %e, "relay upstream failed; trying refresh once");
             if let Some(ref hook) = track.refresh {
                 match hook().await {
                     Ok(new_url) if !new_url.is_empty() => {
                         track.url = new_url.clone();
-                        {
+                        let still_current = {
                             let mut g = state.lock().await;
-                            if let Some(cur) = g.current.as_mut() {
+                            if let Some(cur) = g
+                                .current
+                                .as_mut()
+                                .filter(|current| current.generation == generation)
+                            {
                                 cur.source.url = new_url;
+                                true
+                            } else {
+                                false
                             }
+                        };
+                        if !still_current {
+                            write_simple(&mut stream, 410, "Gone", b"stale track").await?;
+                            return Ok(());
                         }
                         proxy_stream(
                             &mut stream,
@@ -524,6 +573,7 @@ mod tests {
         std::fs::write(&cache, b"audio").unwrap();
         let relay = AudioRelay {
             state: Arc::new(Mutex::new(RelayState::default())),
+            generation: Arc::new(AtomicU64::new(0)),
             port: 0,
         };
 
@@ -545,6 +595,35 @@ mod tests {
             .await;
 
         assert!(!cache.exists());
+    }
+
+    #[tokio::test]
+    async fn replacing_track_rejects_stale_url() {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let relay = AudioRelay::start(client).await.unwrap();
+        let track = || TrackSource {
+            url: "http://127.0.0.1:1/audio".into(),
+            platform: Platform::Qq,
+            refresh: None,
+            local_cache: None,
+        };
+
+        relay.set_track(track()).await;
+        let stale_url = relay.current_url();
+        relay.set_track(track()).await;
+        assert_ne!(stale_url, relay.current_url());
+
+        let stale_path = stale_url.split_once("/current").unwrap().1;
+        let mut sock = TcpStream::connect(format!("127.0.0.1:{}", relay.port()))
+            .await
+            .unwrap();
+        let req = format!(
+            "GET /current{stale_path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        );
+        sock.write_all(req.as_bytes()).await.unwrap();
+        let mut resp = Vec::new();
+        sock.read_to_end(&mut resp).await.unwrap();
+        assert!(resp.starts_with(b"HTTP/1.1 410 Gone"));
     }
 
     /// Integration: real relay request path against a local mock CDN.
@@ -583,7 +662,11 @@ mod tests {
         let mut sock = TcpStream::connect(format!("127.0.0.1:{}", relay.port()))
             .await
             .unwrap();
-        let req = "GET /current HTTP/1.1\r\nHost: 127.0.0.1\r\nRange: bytes=100-\r\nConnection: close\r\n\r\n";
+        let path = relay.current_url();
+        let path = path.split_once("/current").unwrap().1;
+        let req = format!(
+            "GET /current{path} HTTP/1.1\r\nHost: 127.0.0.1\r\nRange: bytes=100-\r\nConnection: close\r\n\r\n"
+        );
         sock.write_all(req.as_bytes()).await.unwrap();
         let mut resp = Vec::new();
         sock.read_to_end(&mut resp).await.unwrap();
