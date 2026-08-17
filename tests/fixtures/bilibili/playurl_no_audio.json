@@ -1,0 +1,17 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "dash": {
+      "duration": 150,
+      "video": [
+        {
+          "id": 30032,
+          "baseUrl": "https://upcdn.example.invalid/video.mp4",
+          "bandwidth": 1000000,
+          "mimeType": "video/mp4"
+        }
+      ]
+    }
+  }
+}

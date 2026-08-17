@@ -42,6 +42,7 @@ async fn play_stack_qq_or_netease() {
             platform,
             refresh: None,
             local_cache: None,
+            referer: None,
         })
         .await;
 

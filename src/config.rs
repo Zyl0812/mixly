@@ -48,6 +48,7 @@ pub fn preferred_platform_from_config(cfg: &Config) -> Platform {
     match cfg.general.preferred_platform.to_ascii_lowercase().as_str() {
         "netease" | "网易云" | "wy" | "163" => Platform::Netease,
         "qq" | "tencent" | "qqmusic" => Platform::Qq,
+        "bilibili" | "bili" | "b站" => Platform::Bilibili,
         _ => Platform::Qq,
     }
 }
@@ -102,6 +103,8 @@ pub struct AppPaths {
     pub playlists_dir: PathBuf,
     pub netease_token: PathBuf,
     pub qq_token: PathBuf,
+    /// Bilibili 扫码登录会话（仅保存必要 Cookie 字段，禁止写入日志）
+    pub bilibili_token: PathBuf,
     /// 本地音乐库索引
     pub local_library: PathBuf,
 }
@@ -116,6 +119,7 @@ impl AppPaths {
             playlists_dir: config_dir.join("playlists"),
             netease_token: config_dir.join("netease_token.json"),
             qq_token: config_dir.join("qq_token.json"),
+            bilibili_token: config_dir.join("bilibili_token.json"),
             local_library: config_dir.join("local_library.json"),
             config_dir,
         })
@@ -327,6 +331,12 @@ mod tests {
         let mut cfg2 = Config::default();
         cfg2.general.preferred_platform = "netease".into();
         assert_eq!(preferred_platform_from_config(&cfg2), Platform::Netease);
+        let mut cfg3 = Config::default();
+        cfg3.general.preferred_platform = "bilibili".into();
+        assert_eq!(preferred_platform_from_config(&cfg3), Platform::Bilibili);
+        let mut cfg4 = Config::default();
+        cfg4.general.preferred_platform = "不存在的平台".into();
+        assert_eq!(preferred_platform_from_config(&cfg4), Platform::Qq);
     }
 
     #[test]

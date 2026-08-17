@@ -24,6 +24,8 @@ pub struct TrackSource {
     pub refresh: Option<RefreshHook>,
     /// 若已预取到本地文件，中继优先从此文件提供（支持 Range）。
     pub local_cache: Option<PathBuf>,
+    /// 逐曲 Referer（Bilibili 需精确到视频页）；None 时用平台默认值。
+    pub referer: Option<String>,
 }
 
 pub type RefreshHook = Arc<dyn Fn() -> RefreshFuture + Send + Sync>;
@@ -148,17 +150,19 @@ fn request_generation(path: &str) -> Option<u64> {
 }
 
 /// CDN 反盗链要求的 Referer + 浏览器 UA（中继与预取共用）。
-pub fn cdn_headers(platform: Platform) -> HeaderMap {
+/// `per_track_referer` 覆盖平台默认值（Bilibili 逐曲精确到视频页）。
+pub fn cdn_headers(platform: Platform, per_track_referer: Option<&str>) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    let referer = match platform {
+    let referer = per_track_referer.unwrap_or(match platform {
         Platform::Netease => "https://music.163.com/",
         Platform::Qq => "https://y.qq.com/",
+        Platform::Bilibili => "https://www.bilibili.com/",
         Platform::Local => "",
-    };
+    });
     if !referer.is_empty() {
         headers.insert(
             HeaderName::from_static("referer"),
-            HeaderValue::from_static(referer),
+            HeaderValue::from_str(referer).unwrap_or_else(|_| HeaderValue::from_static("")),
         );
     }
     headers.insert(
@@ -308,7 +312,7 @@ async fn proxy_stream(
         return serve_local_file(stream, path, range, head_only).await;
     }
 
-    let mut headers = cdn_headers(track.platform);
+    let mut headers = cdn_headers(track.platform, track.referer.as_deref());
     if let Some(r) = range {
         headers.insert(
             RANGE,
@@ -527,6 +531,41 @@ mod tests {
     use tokio::net::TcpListener;
 
     #[test]
+    fn cdn_headers_per_track_referer_overrides_platform_default() {
+        // 平台默认值
+        let qq = cdn_headers(Platform::Qq, None);
+        assert_eq!(
+            qq.get("referer").and_then(|v| v.to_str().ok()),
+            Some("https://y.qq.com/")
+        );
+        let bili_default = cdn_headers(Platform::Bilibili, None);
+        assert_eq!(
+            bili_default.get("referer").and_then(|v| v.to_str().ok()),
+            Some("https://www.bilibili.com/")
+        );
+        // Bilibili 逐曲精确到视频页/分P
+        let exact = cdn_headers(
+            Platform::Bilibili,
+            Some("https://www.bilibili.com/video/BV1xx411c7mD?p=2"),
+        );
+        assert_eq!(
+            exact.get("referer").and_then(|v| v.to_str().ok()),
+            Some("https://www.bilibili.com/video/BV1xx411c7mD?p=2")
+        );
+        // UA 始终带浏览器标识
+        for h in [&qq, &bili_default, &exact] {
+            let ua = h
+                .get("user-agent")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            assert!(ua.starts_with("Mozilla/5.0"));
+        }
+        // 本地无 referer
+        let local = cdn_headers(Platform::Local, None);
+        assert!(local.get("referer").is_none());
+    }
+
+    #[test]
     fn range_meta_full() {
         let (st, cr, start, len) = range_response_meta(1000, None);
         assert_eq!(st, 200);
@@ -583,6 +622,7 @@ mod tests {
                 platform: Platform::Qq,
                 refresh: None,
                 local_cache: Some(cache.clone()),
+                referer: None,
             })
             .await;
         relay
@@ -591,6 +631,7 @@ mod tests {
                 platform: Platform::Qq,
                 refresh: None,
                 local_cache: None,
+                referer: None,
             })
             .await;
 
@@ -606,6 +647,7 @@ mod tests {
             platform: Platform::Qq,
             refresh: None,
             local_cache: None,
+            referer: None,
         };
 
         relay.set_track(track()).await;
@@ -656,6 +698,7 @@ mod tests {
                 platform: Platform::Netease,
                 refresh: None,
                 local_cache: None,
+                referer: None,
             })
             .await;
 

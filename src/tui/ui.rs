@@ -103,6 +103,14 @@ fn draw_header(f: &mut Frame, area: Rect, app: &App) {
         left.push(account_span(app.login_netease));
         left.push(Span::styled(" · QQ ", t::faint()));
         left.push(account_span(app.login_qq));
+        left.push(Span::styled(" · B站 ", t::faint()));
+        left.push(account_span(app.login_bilibili));
+        if !app.login_bilibili {
+            left.push(Span::styled(
+                " 扫码登录: mixly login --platform bilibili",
+                t::faint(),
+            ));
+        }
         left.push(Span::styled(
             match app.view {
                 ViewMode::List => "   列表 · v 切播放页 · ? 快捷键",

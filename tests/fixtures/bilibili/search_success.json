@@ -1,0 +1,32 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "result": [
+      {
+        "type": "video",
+        "aid": 10001,
+        "bvid": "BV1xx411c7mD",
+        "title": "周杰伦<em class=\"keyword\">晴天</em> 现场版",
+        "pic": "//i0.hdslb.com/bfs/archive/ffffffff00000000.png",
+        "author": "示例UP主",
+        "mid": 90001,
+        "duration": "3:45",
+        "typename": "音乐",
+        "play": 100
+      },
+      {
+        "type": "video",
+        "aid": 10002,
+        "bvid": "BV1yyyyyyyyy",
+        "title": "纯音乐合集",
+        "pic": "https://i0.hdslb.com/bfs/archive/eeeeeeee.png",
+        "author": "",
+        "mid": 90002,
+        "duration": 600,
+        "typename": "音乐",
+        "play": 50
+      }
+    ]
+  }
+}

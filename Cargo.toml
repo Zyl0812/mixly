@@ -18,6 +18,8 @@ directories = "6"
 futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["png"] }
 interprocess = { version = "2", features = ["tokio"] }
+# Bilibili WBI 签名需要 MD5（复用 lockfile 中已存在的 md5 crate）
+md5 = "0.8"
 # Upstream 0.1.0 forces `.no_proxy()` on both API clients. Keep the locked
 # version locally so API and audio requests honor the same resolved proxy.
 netease-qq-music-api = { version = "=0.1.0", path = "vendor/netease-qq-music-api" }

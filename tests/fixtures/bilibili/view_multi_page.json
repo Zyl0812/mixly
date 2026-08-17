@@ -1,0 +1,19 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "bvid": "BV1xx411c7mD",
+    "aid": 10001,
+    "videos": 3,
+    "title": "示例视频标题",
+    "pic": "https://i0.hdslb.com/bfs/archive/aaaaaaaa.png",
+    "duration": 400,
+    "owner": { "mid": 90001, "name": "示例UP主" },
+    "tname": "音乐",
+    "pages": [
+      { "cid": 700001, "page": 1, "part": "P1", "duration": 100 },
+      { "cid": 700002, "page": 2, "part": "P2", "duration": 150 },
+      { "cid": 700003, "page": 3, "part": "P3", "duration": 150 }
+    ]
+  }
+}

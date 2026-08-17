@@ -1380,6 +1380,7 @@ dependencies = [
  "futures-util",
  "image",
  "interprocess",
+ "md5",
  "netease-qq-music-api",
  "qrcode",
  "ratatui",

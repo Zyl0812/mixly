@@ -6,14 +6,14 @@ use crate::skill::SkillAgent;
 #[command(
     name = "mixly",
     version,
-    about = "轻量 CLI/TUI 音乐播放器（网易云 + QQ + 本地文件）"
+    about = "轻量 CLI/TUI 音乐播放器（网易云 + QQ + B站 + 本地文件）"
 )]
 pub struct Cli {
     /// 代理地址（如 socks5://host:port 或 http://...）。优先于配置文件与环境变量。
     #[arg(long, global = true)]
     pub proxy: Option<String>,
 
-    /// 双平台搜索时优先的平台（覆盖配置文件）。qq | netease
+    /// 在线平台搜索时优先的平台（覆盖配置文件）。qq | netease | bilibili
     #[arg(long, global = true, value_enum)]
     pub prefer: Option<PreferArg>,
 
@@ -25,16 +25,19 @@ pub struct Cli {
 pub enum PlatformArg {
     Netease,
     Qq,
+    /// Bilibili 视频音频（需扫码登录）
+    Bilibili,
     /// 本地音乐库
     Local,
     All,
 }
 
-/// 双平台时的优先侧（与配置 general.preferred_platform 对应）
+/// 在线平台优先侧（与配置 general.preferred_platform 对应）
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum PreferArg {
     Qq,
     Netease,
+    Bilibili,
 }
 
 impl PreferArg {
@@ -42,6 +45,7 @@ impl PreferArg {
         match self {
             Self::Qq => crate::models::Platform::Qq,
             Self::Netease => crate::models::Platform::Netease,
+            Self::Bilibili => crate::models::Platform::Bilibili,
         }
     }
 }
@@ -55,21 +59,24 @@ impl PlatformArg {
         match self {
             Self::Netease => vec![crate::models::Platform::Netease],
             Self::Qq => vec![crate::models::Platform::Qq],
+            Self::Bilibili => vec![crate::models::Platform::Bilibili],
             Self::Local => vec![],
-            Self::All => match prefer {
-                crate::models::Platform::Qq => vec![
+            Self::All => {
+                // 首选平台在前，其余按固定顺序补齐
+                let fixed = [
                     crate::models::Platform::Qq,
                     crate::models::Platform::Netease,
-                ],
-                crate::models::Platform::Netease => vec![
-                    crate::models::Platform::Netease,
-                    crate::models::Platform::Qq,
-                ],
-                crate::models::Platform::Local => vec![
-                    crate::models::Platform::Qq,
-                    crate::models::Platform::Netease,
-                ],
-            },
+                    crate::models::Platform::Bilibili,
+                ];
+                let mut order = Vec::with_capacity(3);
+                order.push(prefer);
+                for p in fixed {
+                    if p != prefer && !order.contains(&p) {
+                        order.push(p);
+                    }
+                }
+                order
+            }
         }
     }
 
@@ -86,23 +93,35 @@ mod prefer_order_tests {
     #[test]
     fn all_prefers_qq_first_by_default_order() {
         let v = PlatformArg::All.as_online_platforms(Platform::Qq);
-        assert_eq!(v, vec![Platform::Qq, Platform::Netease]);
+        assert_eq!(v, vec![Platform::Qq, Platform::Netease, Platform::Bilibili]);
     }
 
     #[test]
     fn all_can_prefer_netease_first() {
         let v = PlatformArg::All.as_online_platforms(Platform::Netease);
-        assert_eq!(v, vec![Platform::Netease, Platform::Qq]);
+        assert_eq!(v, vec![Platform::Netease, Platform::Qq, Platform::Bilibili]);
+    }
+
+    #[test]
+    fn all_can_prefer_bilibili_first() {
+        let v = PlatformArg::All.as_online_platforms(Platform::Bilibili);
+        assert_eq!(v, vec![Platform::Bilibili, Platform::Qq, Platform::Netease]);
+    }
+
+    #[test]
+    fn explicit_bilibili_only_that_platform() {
+        let v = PlatformArg::Bilibili.as_online_platforms(Platform::Qq);
+        assert_eq!(v, vec![Platform::Bilibili]);
     }
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// 搜索歌曲（网易云 / QQ / 本地库，默认 all）
+    /// 搜索歌曲（网易云 / QQ / B站 / 本地库，默认 all）
     Search {
         /// 搜索关键词
         keyword: String,
-        /// 平台：netease | qq | local | all
+        /// 平台：netease | qq | bilibili | local | all
         #[arg(long, value_enum, default_value_t = PlatformArg::All)]
         platform: PlatformArg,
         /// 每个平台返回条数
@@ -113,14 +132,15 @@ pub enum Commands {
     ///
     /// 示例：
     ///   mixly play netease 347230
+    ///   mixly play bilibili BV1xx411c7mD
+    ///   mixly play bilibili https://www.bilibili.com/video/BV1xx/?p=2
     ///   mixly play "晴天"
     ///   mixly play "晴天" --platform qq --loop
     ///   mixly play "我的歌单"
-    ///   mixly play "我的歌单" --random
     ///   mixly play "我的歌单" --random --loop
     ///   mixly play "我的歌单" --playlist
     Play {
-        /// 一个参数：歌名或歌单名；两个参数：平台 + 歌曲 ID（如 netease 347230）
+        /// 一个参数：歌名或歌单名；两个参数：平台 + 歌曲 ID（如 netease 347230 / bilibili BV1xx:p2）
         #[arg(required = true, num_args = 1..=2)]
         targets: Vec<String>,
         /// 循环：单曲=单曲循环；歌单=列表循环（可与 --random 合用）
@@ -138,7 +158,13 @@ pub enum Commands {
     },
     /// 扫码登录指定平台
     Login {
-        /// 登录平台：netease | qq
+        /// 登录平台：netease | qq | bilibili
+        #[arg(long, value_enum)]
+        platform: LoginPlatform,
+    },
+    /// 退出登录并删除本机凭证（仅影响指定平台）
+    Logout {
+        /// 退出平台：netease | qq | bilibili
         #[arg(long, value_enum)]
         platform: LoginPlatform,
     },
@@ -250,17 +276,18 @@ pub enum LocalCmd {
 pub enum ConfigCmd {
     /// 打印当前配置要点
     Show,
-    /// 设置双平台搜索优先平台：qq | netease
+    /// 设置搜索优先平台：qq | netease | bilibili
     Prefer {
-        /// qq 或 netease
+        /// qq、netease 或 bilibili
         platform: String,
     },
 }
 
-#[derive(Debug, Clone, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum LoginPlatform {
     Netease,
     Qq,
+    Bilibili,
 }
 
 #[derive(Debug, Subcommand)]
@@ -293,9 +320,9 @@ pub enum PlaylistCmd {
     Add {
         /// 歌单 ID 或名称
         id_or_name: String,
-        /// 平台：netease | qq | local（local 时 song_id 为文件路径）
+        /// 平台：netease | qq | bilibili | local（local 时 song_id 为文件路径）
         platform: String,
-        /// 歌曲 ID（local 平台填绝对/相对路径）
+        /// 歌曲 ID（B站 为 BV 号/分P；local 平台填绝对/相对路径）
         song_id: String,
         /// 歌曲名（可选）
         #[arg(long)]

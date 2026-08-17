@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
@@ -40,6 +40,11 @@ pub fn should_prefetch(time_pos: f64, duration: f64) -> bool {
     let progress = time_pos / duration;
     let remain = duration - time_pos;
     progress >= PREFETCH_PROGRESS_THRESHOLD || remain <= PREFETCH_REMAIN_SECS
+}
+
+/// 是否允许整段预取。Bilibili 视频时长不可控且只需在线流式播放，永远跳过。
+pub fn prefetchable(platform: Platform) -> bool {
+    platform != Platform::Bilibili
 }
 
 /// 已预取完成的曲目（本地缓存 + 可交给中继的 TrackSource）。
@@ -102,6 +107,11 @@ pub async fn prefetch_song(
         });
     }
 
+    // Bilibili 不做整段预取：调用方应先按 prefetchable() 跳过，这里兜底
+    if !prefetchable(song.platform) {
+        bail!("平台 {} 不支持整段预取，将实时流式播放", song.platform);
+    }
+
     let mut track = api
         .resolve_track(song)
         .await
@@ -158,7 +168,7 @@ async fn download_to_file(
 ) -> Result<()> {
     let resp = client
         .get(url)
-        .headers(crate::relay::cdn_headers(platform))
+        .headers(crate::relay::cdn_headers(platform, None))
         .send()
         .await
         .context("预取 HTTP 请求")?;
@@ -268,5 +278,13 @@ mod tests {
         assert!(!should_prefetch(10.0, 0.0));
         assert!(!should_prefetch(10.0, f64::NAN));
         assert!(!should_prefetch(f64::NAN, 100.0));
+    }
+
+    #[test]
+    fn bilibili_never_prefetchable_others_yes() {
+        assert!(!prefetchable(Platform::Bilibili));
+        assert!(prefetchable(Platform::Qq));
+        assert!(prefetchable(Platform::Netease));
+        assert!(prefetchable(Platform::Local));
     }
 }

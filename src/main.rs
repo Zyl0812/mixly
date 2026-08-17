@@ -17,7 +17,8 @@ use mixly::lyrics::lyrics_state_from_lrc;
 use mixly::player::MpvPlayer;
 use mixly::playlist::{PlayQueue, PlaylistStore};
 use mixly::prefetch::{
-    log_prefetch_fail, log_prefetch_start, should_prefetch, PrefetchJob, PrefetchedTrack,
+    log_prefetch_fail, log_prefetch_start, prefetchable, should_prefetch, PrefetchJob,
+    PrefetchedTrack,
 };
 use mixly::relay::AudioRelay;
 use mixly::skill::{install_skill, skill_file_path, uninstall_skill, SkillScope};
@@ -119,11 +120,14 @@ async fn async_main(
             .await
         }
         Commands::Login { platform } => {
-            let p = match platform {
-                LoginPlatform::Netease => Platform::Netease,
-                LoginPlatform::Qq => Platform::Qq,
-            };
+            let p = login_platform_to_platform(platform);
             api.login_qr(p).await
+        }
+        Commands::Logout { platform } => {
+            let p = login_platform_to_platform(platform);
+            api.logout(p)?;
+            println!("已退出登录（{}），本机凭证已删除。", p.label_zh());
+            Ok(())
         }
         Commands::Playlist { action } => {
             cmd_playlist(Arc::new(api), &store, &paths, &cfg, action).await
@@ -132,6 +136,14 @@ async fn async_main(
         Commands::Tui => cmd_tui(api, store, &cfg, proxy, prefer).await,
         Commands::Config { action } => cmd_config(&paths, cfg, action),
         Commands::Skill { .. } => unreachable!("skill command handled before runtime setup"),
+    }
+}
+
+fn login_platform_to_platform(p: LoginPlatform) -> Platform {
+    match p {
+        LoginPlatform::Netease => Platform::Netease,
+        LoginPlatform::Qq => Platform::Qq,
+        LoginPlatform::Bilibili => Platform::Bilibili,
     }
 }
 
@@ -249,7 +261,7 @@ fn cmd_config(paths: &AppPaths, mut cfg: mixly::Config, action: ConfigCmd) -> Re
             println!("配置文件: {}", paths.config_file.display());
             println!("音质: {}", cfg.general.quality);
             println!(
-                "双平台优先: {} （qq | netease）",
+                "搜索优先: {} （qq | netease | bilibili）",
                 preferred_platform_from_config(&cfg).label_zh()
             );
             println!(
@@ -264,22 +276,24 @@ fn cmd_config(paths: &AppPaths, mut cfg: mixly::Config, action: ConfigCmd) -> Re
             cfg.general.preferred_platform = match p {
                 Platform::Qq => "qq".into(),
                 Platform::Netease => "netease".into(),
-                Platform::Local => bail!("优先平台只能是 qq 或 netease"),
+                Platform::Bilibili => "bilibili".into(),
+                Platform::Local => bail!("优先平台只能是 qq、netease 或 bilibili"),
             };
             save_config(&paths.config_file, &cfg)?;
             println!(
-                "已设置双平台搜索优先为「{}」，写入 {}",
+                "已设置搜索优先为「{}」，写入 {}",
                 p.label_zh(),
                 paths.config_file.display()
             );
-            println!("临时覆盖可用: mixly --prefer qq|netease search|play ...");
+            println!("临时覆盖可用: mixly --prefer qq|netease|bilibili search|play ...");
         }
     }
     Ok(())
 }
 
 fn parse_platform(s: &str) -> Result<Platform> {
-    Platform::parse(s).ok_or_else(|| anyhow!("未知平台「{s}」，请使用 netease | qq | local"))
+    Platform::parse(s)
+        .ok_or_else(|| anyhow!("未知平台「{s}」，请使用 netease | qq | bilibili | local"))
 }
 
 async fn cmd_search(
@@ -310,6 +324,14 @@ async fn cmd_search(
     }
 
     for p in platform.as_online_platforms(prefer) {
+        if p == Platform::Bilibili && !api.is_logged_in(Platform::Bilibili) {
+            if matches!(platform, PlatformArg::All) {
+                // all 模式：未登录时跳过 Bilibili，其余平台不受影响
+                continue;
+            }
+            eprintln!("[bilibili] Bilibili 未登录，请执行 mixly login --platform bilibili");
+            continue;
+        }
         match api.search(p, keyword, limit).await {
             Ok(songs) => {
                 if songs.is_empty() {
@@ -420,7 +442,16 @@ async fn cmd_play_resolve(
         return play_local_playlist(api, store, cfg, &name, loop_flag, random).await;
     }
 
-    play_by_search(api, cfg, &name, search_platform, prefer, loop_flag, random).await
+    play_by_search(
+        api,
+        cfg,
+        &name,
+        search_platform,
+        prefer,
+        loop_flag,
+        random,
+    )
+    .await
 }
 
 async fn resolve_song_for_platform_id(
@@ -524,6 +555,12 @@ async fn play_by_search(
         }
     }
     for p in platform.as_online_platforms(prefer) {
+        if p == Platform::Bilibili && !api.is_logged_in(Platform::Bilibili) {
+            if !matches!(platform, PlatformArg::All) {
+                eprintln!("[bilibili] Bilibili 未登录，请执行 mixly login --platform bilibili");
+            }
+            continue;
+        }
         match api.search(p, keyword, 5).await {
             Ok(mut songs) => hits.append(&mut songs),
             Err(e) => eprintln!("[{p}] 搜索失败: {e:#}"),
@@ -653,17 +690,19 @@ async fn play_songs(
                         break;
                     }
 
-                    // 进度 ≥70% 或剩余 ≤18s → 预取下一首
+                    // 进度 ≥70% 或剩余 ≤18s → 预取下一首（Bilibili 不预取）
                     if !prefetch_started
                         && prefetch_job.is_none()
                         && ready_prefetch.is_none()
                         && should_prefetch(snap.time_pos, snap.duration)
                     {
                         if let Some(next) = queue.peek_next().cloned() {
-                            log_prefetch_start(&next);
-                            prefetch_job =
-                                Some(PrefetchJob::spawn(api.clone(), client.clone(), next));
-                            prefetch_started = true;
+                            if prefetchable(next.platform) {
+                                log_prefetch_start(&next);
+                                prefetch_job =
+                                    Some(PrefetchJob::spawn(api.clone(), client.clone(), next));
+                                prefetch_started = true;
+                            }
                         }
                     }
 

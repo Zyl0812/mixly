@@ -69,3 +69,35 @@ async fn smoke_qq_search_url_lyrics() {
         Err(e) => eprintln!("qq lyrics: {e:#}"),
     }
 }
+
+/// Bilibili 在线 smoke：搜索 + 详情 + 取非空音频 URL。
+/// 只在已扫码登录（本地会话文件存在）且显式运行 `cargo test -- --ignored` 时通过。
+/// 失败日志只输出平台错误码与阶段，不输出 Cookie 或完整 URL。
+#[tokio::test]
+#[ignore]
+async fn smoke_bilibili_search_detail_audio() {
+    let paths = AppPaths::discover().expect("paths");
+    let api = ApiClient::new(paths, Quality::Exhigh);
+    let songs = api
+        .search(Platform::Bilibili, "周杰伦", 3)
+        .await
+        .expect("bilibili search (需要已登录)");
+    assert!(!songs.is_empty(), "expected bilibili search hits");
+    let song = &songs[0];
+    assert_eq!(song.platform, Platform::Bilibili);
+    // 详情补全 + 取音频 URL（不完整下载）
+    let detail = api
+        .song_detail(Platform::Bilibili, &song.id)
+        .await
+        .expect("bilibili detail");
+    let url = api
+        .play_url(Platform::Bilibili, &detail.id)
+        .await
+        .expect("bilibili audio url");
+    assert!(url.starts_with("http"), "audio url must be http(s)");
+    println!(
+        "bilibili ok bvid={} prefix={}",
+        detail.id,
+        &url[..url.len().min(48)]
+    );
+}

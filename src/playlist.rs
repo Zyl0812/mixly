@@ -466,6 +466,86 @@ mod tests {
     }
 
     #[test]
+    fn mixed_playlist_roundtrips_all_platforms() {
+        // 三在线平台 + 本地文件混合歌单，往返一致
+        let dir = tempdir().unwrap();
+        let store = PlaylistStore::new(dir.path()).unwrap();
+        let pl = store.create("混排").unwrap();
+        store
+            .add_song(
+                &pl.id,
+                Song {
+                    platform: Platform::Qq,
+                    id: "0039MnYb0qxYhV".into(),
+                    name: "晴天".into(),
+                    artists: vec!["周杰伦".into()],
+                    album: Some("叶惠美".into()),
+                    duration_ms: Some(269_000),
+                    cover_url: None,
+                },
+            )
+            .unwrap();
+        store
+            .add_song(
+                &pl.id,
+                Song {
+                    platform: Platform::Netease,
+                    id: "347230".into(),
+                    name: "海阔天空".into(),
+                    artists: vec!["Beyond".into()],
+                    album: None,
+                    duration_ms: None,
+                    cover_url: None,
+                },
+            )
+            .unwrap();
+        store
+            .add_song(
+                &pl.id,
+                Song {
+                    platform: Platform::Bilibili,
+                    id: "BV1xx411c7mD:p2".into(),
+                    name: "晴天（P2）".into(),
+                    artists: vec!["某某UP".into()],
+                    album: Some("音乐".into()),
+                    duration_ms: Some(225_000),
+                    cover_url: None,
+                },
+            )
+            .unwrap();
+        store
+            .add_song(
+                &pl.id,
+                Song {
+                    platform: Platform::Local,
+                    id: "D:\\music\\demo.flac".into(),
+                    name: "demo".into(),
+                    artists: vec!["本地".into()],
+                    album: Some("本地文件".into()),
+                    duration_ms: None,
+                    cover_url: None,
+                },
+            )
+            .unwrap();
+
+        let loaded = store.find("混排").unwrap();
+        assert_eq!(loaded.songs.len(), 4);
+        let platforms: Vec<Platform> = loaded.songs.iter().map(|s| s.platform).collect();
+        assert_eq!(
+            platforms,
+            vec![
+                Platform::Qq,
+                Platform::Netease,
+                Platform::Bilibili,
+                Platform::Local
+            ]
+        );
+        let bili = &loaded.songs[2];
+        assert_eq!(bili.id, "BV1xx411c7mD:p2");
+        assert_eq!(bili.name, "晴天（P2）");
+    }
+
+    #[test]
     fn playback_backfills_album_without_overwriting_existing_value() {
         let dir = tempdir().unwrap();
         let store = PlaylistStore::new(dir.path()).unwrap();

@@ -78,6 +78,7 @@ pub struct App {
     pub quality: Quality,
     pub login_netease: bool,
     pub login_qq: bool,
+    pub login_bilibili: bool,
 }
 
 pub struct TuiDeps {
@@ -122,6 +123,7 @@ pub async fn run_tui(deps: TuiDeps) -> Result<()> {
         quality: deps.quality,
         login_netease: deps.api.is_logged_in(Platform::Netease),
         login_qq: deps.api.is_logged_in(Platform::Qq),
+        login_bilibili: deps.api.is_logged_in(Platform::Bilibili),
     };
 
     let result = run_loop(&mut terminal, &mut app, &deps).await;
@@ -432,12 +434,13 @@ fn advance_after_load_failure(queue: &mut PlayQueue) -> bool {
 }
 
 async fn search_all(api: &ApiClient, keyword: &str, prefer: Platform) -> Result<Vec<Song>> {
-    let order = match prefer {
-        Platform::Qq | Platform::Local => [Platform::Qq, Platform::Netease],
-        Platform::Netease => [Platform::Netease, Platform::Qq],
-    };
+    // 三平台顺序：首选在前，其余固定顺序补齐；Bilibili 未登录时跳过
+    let order = crate::cli::PlatformArg::All.as_online_platforms(prefer);
     let mut all = Vec::new();
     for p in order {
+        if p == Platform::Bilibili && !api.is_logged_in(Platform::Bilibili) {
+            continue;
+        }
         match api.search(p, keyword, 15).await {
             Ok(mut s) => all.append(&mut s),
             Err(e) => warn!(%p, error = %e, "search platform failed"),

@@ -1,0 +1,34 @@
+{
+  "code": 0,
+  "message": "0",
+  "data": {
+    "dash": {
+      "duration": 150,
+      "minBufferTime": 1.5,
+      "video": [
+        {
+          "id": 30032,
+          "baseUrl": "https://upcdn.example.invalid/video.mp4",
+          "bandwidth": 1000000,
+          "mimeType": "video/mp4"
+        }
+      ],
+      "audio": [
+        {
+          "id": 30216,
+          "baseUrl": "https://upcdn.example.invalid/audio_low.m4s",
+          "bandwidth": 314713,
+          "mimeType": "audio/mp4",
+          "codecs": "mp4a.40.2"
+        },
+        {
+          "id": 30232,
+          "baseUrl": "https://upcdn.example.invalid/audio_high.m4s",
+          "bandwidth": 614713,
+          "mimeType": "audio/mp4",
+          "codecs": "mp4a.40.2"
+        }
+      ]
+    }
+  }
+}

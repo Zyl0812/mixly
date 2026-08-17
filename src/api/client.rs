@@ -14,16 +14,20 @@ use crate::config::AppPaths;
 use crate::models::{Platform, Quality, Song};
 use crate::relay::{RefreshHook, TrackSource};
 
+use super::bilibili::{self, BilibiliClient, ResolvedVideo};
+
 pub struct ApiClient {
     inner: MusicClient,
     paths: AppPaths,
     quality: Quality,
+    bilibili: BilibiliClient,
 }
 
 impl ApiClient {
     pub fn new(paths: AppPaths, quality: Quality) -> Self {
         Self {
             inner: MusicClient::new(),
+            bilibili: BilibiliClient::new(paths.bilibili_token.clone()),
             paths,
             quality,
         }
@@ -33,6 +37,7 @@ impl ApiClient {
         match p {
             Platform::Netease => Ok(ApiPlatform::Netease),
             Platform::Qq => Ok(ApiPlatform::Tencent),
+            Platform::Bilibili => bail!("Bilibili 使用独立私有接口"),
             Platform::Local => bail!("本地平台不使用在线 API"),
         }
     }
@@ -70,12 +75,17 @@ impl ApiClient {
         match platform {
             Platform::Netease => Ok(&self.paths.netease_token),
             Platform::Qq => Ok(&self.paths.qq_token),
+            Platform::Bilibili => Ok(&self.paths.bilibili_token),
             Platform::Local => bail!("本地平台无需登录 token"),
         }
     }
 
     pub fn load_token(&self, platform: Platform) -> Result<Option<LoginToken>> {
         if platform == Platform::Local {
+            return Ok(None);
+        }
+        // Bilibili 会话结构独立，走 BilibiliClient 自己的读写
+        if platform == Platform::Bilibili {
             return Ok(None);
         }
         let path = self.token_path(platform)?;
@@ -90,13 +100,17 @@ impl ApiClient {
 
     /// Whether a persisted login token exists for the platform.
     pub fn is_logged_in(&self, platform: Platform) -> bool {
-        if platform == Platform::Local {
-            return true; // 本地无需登录
+        match platform {
+            Platform::Local => true, // 本地无需登录
+            Platform::Bilibili => self.bilibili.has_session(),
+            _ => matches!(self.load_token(platform), Ok(Some(_))),
         }
-        matches!(self.load_token(platform), Ok(Some(_)))
     }
 
     pub fn save_token(&self, platform: Platform, token: &LoginToken) -> Result<()> {
+        if platform == Platform::Bilibili {
+            bail!("Bilibili 会话请通过扫码登录保存");
+        }
         self.paths.ensure()?;
         let path = self.token_path(platform)?;
         let data = serde_json::to_string_pretty(token)?;
@@ -105,7 +119,27 @@ impl ApiClient {
         Ok(())
     }
 
+    /// 退出登录：删除该平台的本地凭证，不影响其他平台。
+    pub fn logout(&self, platform: Platform) -> Result<()> {
+        match platform {
+            Platform::Bilibili => self.bilibili.delete_session(),
+            Platform::Netease | Platform::Qq => {
+                let path = self.token_path(platform)?;
+                if path.exists() {
+                    std::fs::remove_file(path)
+                        .with_context(|| format!("remove token {}", path.display()))?;
+                }
+                info!(%platform, "logout: local token removed");
+                Ok(())
+            }
+            Platform::Local => bail!("本地平台无需登录"),
+        }
+    }
+
     pub async fn search(&self, platform: Platform, keyword: &str, limit: u64) -> Result<Vec<Song>> {
+        if platform == Platform::Bilibili {
+            return self.bilibili.search(keyword, limit).await;
+        }
         if platform == Platform::Local {
             let lib = crate::local::LocalLibrary::open(&self.paths)?;
             return Ok(lib.search(keyword, limit as usize));
@@ -138,6 +172,10 @@ impl ApiClient {
 
     /// 按平台拉取单曲详情（歌名 / 歌手 / 专辑 / 封面）。平台与 id 必须匹配，不会跨平台查。
     pub async fn song_detail(&self, platform: Platform, id: &str) -> Result<Song> {
+        if platform == Platform::Bilibili {
+            let v = self.bilibili.resolve_video(id).await?;
+            return Ok(video_to_song(&v));
+        }
         if platform == Platform::Local {
             bail!("本地平台不支持在线歌曲详情");
         }
@@ -222,6 +260,11 @@ impl ApiClient {
         id: &str,
         quality: Quality,
     ) -> Result<String> {
+        if platform == Platform::Bilibili {
+            // Bilibili 不映射音质档位：始终取账号允许的最高普通音频带宽
+            let v = self.bilibili.resolve_video(id).await?;
+            return self.bilibili.play_url(&v.bvid, v.cid).await;
+        }
         if platform == Platform::Local {
             let path = std::path::Path::new(id);
             if !path.is_file() {
@@ -273,6 +316,10 @@ impl ApiClient {
     }
 
     pub async fn lyrics(&self, platform: Platform, id: &str) -> Result<String> {
+        if platform == Platform::Bilibili {
+            // 视频没有歌词；空内容不是播放错误
+            return Ok(String::new());
+        }
         if platform == Platform::Local {
             bail!("本地文件暂不支持在线歌词");
         }
@@ -294,6 +341,9 @@ impl ApiClient {
 
     /// Interactive QR login: print QR in terminal and poll until success.
     pub async fn login_qr(&self, platform: Platform) -> Result<()> {
+        if platform == Platform::Bilibili {
+            return self.bilibili.login_qr().await;
+        }
         if platform == Platform::Local {
             bail!("本地平台无需登录");
         }
@@ -319,6 +369,7 @@ impl ApiClient {
         let platform_name = match platform {
             Platform::Netease => "网易云音乐",
             Platform::Qq => "QQ 音乐",
+            Platform::Bilibili => "哔哩哔哩",
             Platform::Local => "本地",
         };
         println!();
@@ -379,6 +430,16 @@ impl ApiClient {
 
     /// Resolve play source: online CDN URL, or local file path via `local_cache`.
     pub async fn resolve_track(self: &Arc<Self>, song: &Song) -> Result<TrackSource> {
+        if song.platform == Platform::Bilibili {
+            let url = self.play_url(song.platform, &song.id).await?;
+            return Ok(TrackSource {
+                url,
+                platform: Platform::Bilibili,
+                refresh: Some(self.make_refresh_hook(song.platform, song.id.clone())),
+                local_cache: None,
+                referer: Some(bilibili::video_referer(&song.id)),
+            });
+        }
         if song.platform == Platform::Local {
             let path = std::path::PathBuf::from(&song.id);
             let path = path
@@ -393,6 +454,7 @@ impl ApiClient {
                 platform: Platform::Local,
                 refresh: None,
                 local_cache: Some(path),
+                referer: None,
             });
         }
         let url = self.play_url(song.platform, &song.id).await?;
@@ -401,7 +463,31 @@ impl ApiClient {
             platform: song.platform,
             refresh: Some(self.make_refresh_hook(song.platform, song.id.clone())),
             local_cache: None,
+            referer: None,
         })
+    }
+}
+
+/// Bilibili 视频详情 → 公共 Song（id 为规范 BV 引用）。
+fn video_to_song(v: &ResolvedVideo) -> Song {
+    let name = if v.page > 1 {
+        format!("{}（P{}）", v.title, v.page)
+    } else {
+        v.title.clone()
+    };
+    let artists: Vec<String> = if v.author.is_empty() {
+        Vec::new()
+    } else {
+        vec![v.author.clone()]
+    };
+    Song {
+        platform: Platform::Bilibili,
+        id: bilibili::canonical_id(&v.bvid, v.page),
+        name,
+        artists,
+        album: v.tname.clone(),
+        duration_ms: v.duration_ms,
+        cover_url: v.pic.clone(),
     }
 }
 
@@ -448,6 +534,7 @@ mod tests {
             platform: Platform::Qq,
             refresh: Some(hook),
             local_cache: None,
+            referer: None,
         };
         assert!(track.refresh.is_some());
         // Calling make_refresh_hook twice yields independent hooks.
