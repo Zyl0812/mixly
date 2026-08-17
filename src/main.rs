@@ -21,14 +21,23 @@ use mixly::prefetch::{
     PrefetchedTrack,
 };
 use mixly::relay::AudioRelay;
-use mixly::skill::{install_skill, skill_file_path, uninstall_skill, SkillScope};
+use mixly::skill::{install_skill, skill_file_path, uninstall_skill, SkillAgent, SkillScope};
+use mixly::status::{read_now_playing, render_claude_status};
 use mixly::tui::run_tui;
-use mixly::{ApiClient, Platform, PlayMode, Song};
+use mixly::{ApiClient, LyricsState, Platform, PlayMode, Song};
 use tokio::sync::Mutex;
 use tracing::warn;
 
 fn main() {
     let cli = Cli::parse();
+
+    // `status` 是最轻量的命令：在网络/播放器/tracing 初始化之前处理，
+    // 保证 Claude Code 每秒调用足够快。
+    if let Commands::Status { claude, .. } = &cli.command {
+        let out = cmd_status(*claude);
+        print!("{out}");
+        return;
+    }
 
     if let Commands::Skill { action } = &cli.command {
         if let Err(e) = cmd_skill(action) {
@@ -135,6 +144,7 @@ async fn async_main(
         Commands::Local { action } => cmd_local(&paths, &store, action),
         Commands::Tui => cmd_tui(api, store, &cfg, proxy, prefer).await,
         Commands::Config { action } => cmd_config(&paths, cfg, action),
+        Commands::Status { .. } => unreachable!("status handled before runtime setup"),
         Commands::Skill { .. } => unreachable!("skill command handled before runtime setup"),
     }
 }
@@ -147,6 +157,28 @@ fn login_platform_to_platform(p: LoginPlatform) -> Platform {
     }
 }
 
+/// `status` 命令：不初始化网络/播放器/tracing，保证足够轻量。
+fn cmd_status(claude: bool) -> String {
+    let Ok(paths) = AppPaths::discover() else {
+        return String::new();
+    };
+    let Some(np) = read_now_playing(&paths.now_playing) else {
+        return String::new(); // 无播放或过期：退出码 0，不输出音乐行
+    };
+    if claude {
+        let columns = std::env::var("COLUMNS")
+            .ok()
+            .and_then(|c| c.parse::<usize>().ok())
+            .unwrap_or(80);
+        render_claude_status(&np, columns)
+    } else {
+        match serde_json::to_string(&np) {
+            Ok(json) => format!("{json}\n"),
+            Err(_) => String::new(),
+        }
+    }
+}
+
 fn cmd_skill(action: &SkillCmd) -> Result<()> {
     match action {
         SkillCmd::Install {
@@ -156,6 +188,9 @@ fn cmd_skill(action: &SkillCmd) -> Result<()> {
             force,
         } => {
             let scope = skill_scope(*global, *project);
+            if *agent == SkillAgent::Claude && *global {
+                mixly::skill::preflight_claude_plugin_install(*force)?;
+            }
             let (path, changed) = install_skill(*agent, scope, *force)?;
             if changed {
                 println!("Installed mixly skill to:");
@@ -163,6 +198,17 @@ fn cmd_skill(action: &SkillCmd) -> Result<()> {
                 println!("Mixly skill is already installed at:");
             }
             println!("{}", path.display());
+            // Claude 全局安装顺带装插件 + status line
+            if *agent == SkillAgent::Claude && *global {
+                let (plugin_path, plugin_changed) = mixly::skill::install_claude_plugin(*force)?;
+                if plugin_changed {
+                    println!("Installed Claude plugin + status line:");
+                    println!("  {}", plugin_path.display());
+                    println!("  ~/.claude/settings.json 已配置 mixly status --claude");
+                } else {
+                    println!("Claude plugin + status line already configured.");
+                }
+            }
             println!("Restart the agent if the skill is not detected automatically.");
         }
         SkillCmd::Uninstall {
@@ -172,6 +218,9 @@ fn cmd_skill(action: &SkillCmd) -> Result<()> {
             force,
         } => {
             let scope = skill_scope(*global, *project);
+            if *agent == SkillAgent::Claude && *global {
+                mixly::skill::preflight_claude_plugin_uninstall(*force)?;
+            }
             let (path, changed) = uninstall_skill(*agent, scope, *force)?;
             if changed {
                 println!("Removed mixly skill from:");
@@ -179,6 +228,15 @@ fn cmd_skill(action: &SkillCmd) -> Result<()> {
                 println!("Mixly skill is not installed at:");
             }
             println!("{}", path.display());
+            if *agent == SkillAgent::Claude && *global {
+                let (plugin_path, plugin_changed) = mixly::skill::uninstall_claude_plugin(*force)?;
+                if plugin_changed {
+                    println!("Removed Claude plugin + status line:");
+                    println!("  {}", plugin_path.display());
+                } else {
+                    println!("Claude plugin not installed (nothing to remove).");
+                }
+            }
         }
         SkillCmd::Path {
             agent,
@@ -399,11 +457,12 @@ async fn cmd_play_resolve(
             } else {
                 PlayMode::Sequential
             };
-            return play_songs(api, cfg, vec![song], mode, None).await;
+            return play_songs(api, paths, cfg, vec![song], mode, None).await;
         }
         let keyword = targets.join(" ");
         return play_by_search(
             api,
+            paths,
             cfg,
             &keyword,
             search_platform,
@@ -420,7 +479,7 @@ async fn cmd_play_resolve(
         .ok_or_else(|| anyhow!("请提供歌曲 ID、歌名、路径或歌单名"))?;
 
     if force_playlist {
-        return play_local_playlist(api, store, cfg, &name, loop_flag, random).await;
+        return play_local_playlist(api, paths, store, cfg, &name, loop_flag, random).await;
     }
 
     // 磁盘上的音频文件
@@ -433,17 +492,18 @@ async fn cmd_play_resolve(
         } else {
             PlayMode::Sequential
         };
-        return play_songs(api, cfg, vec![song], mode, None).await;
+        return play_songs(api, paths, cfg, vec![song], mode, None).await;
     }
 
     // 优先本地歌单
     if store.find(&name).is_ok() {
         println!("按本地歌单播放：「{name}」");
-        return play_local_playlist(api, store, cfg, &name, loop_flag, random).await;
+        return play_local_playlist(api, paths, store, cfg, &name, loop_flag, random).await;
     }
 
     play_by_search(
         api,
+        paths,
         cfg,
         &name,
         search_platform,
@@ -505,6 +565,7 @@ fn playlist_play_mode(loop_flag: bool, random: bool) -> (PlayMode, bool) {
 
 async fn play_local_playlist(
     api: Arc<ApiClient>,
+    paths: &AppPaths,
     store: &PlaylistStore,
     cfg: &mixly::Config,
     id_or_name: &str,
@@ -530,11 +591,13 @@ async fn play_local_playlist(
     } else {
         println!("播放歌单「{}」（{} 首）", pl.name, songs.len());
     }
-    play_songs(api, cfg, songs, mode, Some(store)).await
+    play_songs(api, paths, cfg, songs, mode, Some(store)).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn play_by_search(
     api: Arc<ApiClient>,
+    paths: &AppPaths,
     cfg: &mixly::Config,
     keyword: &str,
     platform: PlatformArg,
@@ -587,11 +650,12 @@ async fn play_by_search(
     } else {
         PlayMode::Sequential
     };
-    play_songs(api, cfg, vec![song], mode, None).await
+    play_songs(api, paths, cfg, vec![song], mode, None).await
 }
 
 async fn play_songs(
     api: Arc<ApiClient>,
+    paths: &AppPaths,
     cfg: &mixly::Config,
     songs: Vec<Song>,
     mode: PlayMode,
@@ -656,17 +720,20 @@ async fn play_songs(
             }
         }
 
-        if let Err(e) = load_into_player(api.clone(), &relay, &mut player, &song, prefetched).await
-        {
-            eprintln!("播放错误: {e:#}");
-            if mode == PlayMode::LoopOne {
-                break;
-            }
-            if !queue.advance() {
-                break;
-            }
-            continue;
-        }
+        let mut lyrics_state =
+            match load_into_player(api.clone(), &relay, &mut player, &song, prefetched).await {
+                Ok(state) => state,
+                Err(e) => {
+                    eprintln!("播放错误: {e:#}");
+                    if mode == PlayMode::LoopOne {
+                        break;
+                    }
+                    if !queue.advance() {
+                        break;
+                    }
+                    continue;
+                }
+            };
 
         let mut saw_play = false;
         let started = std::time::Instant::now();
@@ -688,6 +755,25 @@ async fn play_songs(
                     if !saw_play && started.elapsed() > Duration::from_secs(20) {
                         eprintln!("等待开播超时，跳过本曲");
                         break;
+                    }
+
+                    // 写入播放状态，供 `mixly status --claude` 读取
+                    lyrics_state.update_index(snap.time_pos);
+                    let np = mixly::status::NowPlaying {
+                        version: mixly::status::NOW_PLAYING_VERSION,
+                        pid: std::process::id(),
+                        updated_at_ms: mixly::status::now_ms(),
+                        platform: song.platform.as_str().to_string(),
+                        song_id: song.id.clone(),
+                        title: song.name.clone(),
+                        artists: song.artists.clone(),
+                        position_secs: snap.time_pos,
+                        duration_secs: snap.duration,
+                        paused: snap.paused,
+                        lyric: lyrics_state.current_line().map(|s| s.to_string()),
+                    };
+                    if let Err(e) = mixly::status::write_now_playing(&paths.now_playing, &np) {
+                        warn!(error = %e, "写入播放状态失败");
                     }
 
                     // 进度 ≥70% 或剩余 ≤18s → 预取下一首（Bilibili 不预取）
@@ -736,6 +822,8 @@ async fn play_songs(
     }
     drop(ready_prefetch.take());
 
+    // 正常退出：仅当状态文件的 pid 仍是本进程时清理
+    mixly::status::clear_now_playing(&paths.now_playing, std::process::id());
     let _ = player.shutdown().await;
     Ok(())
 }
@@ -746,7 +834,7 @@ async fn load_into_player(
     player: &mut MpvPlayer,
     song: &Song,
     prefetched: Option<PrefetchedTrack>,
-) -> Result<()> {
+) -> Result<LyricsState> {
     let track = if let Some(p) = prefetched {
         p.into_track()
     } else {
@@ -758,13 +846,17 @@ async fn load_into_player(
     player.loadfile(&relay.current_url()).await?;
     player.set_pause(false).await?;
 
-    if let Ok(lrc) = api.lyrics(song.platform, &song.id).await {
-        let state = lyrics_state_from_lrc(&lrc);
-        if let Some((_, line)) = state.lines.first() {
-            println!("  ♪ {line}");
+    // Bilibili 无歌词返回空内容；其余平台失败也按无歌词处理，不阻断播放
+    match api.lyrics(song.platform, &song.id).await {
+        Ok(lrc) if !lrc.is_empty() => {
+            let state = lyrics_state_from_lrc(&lrc);
+            if let Some((_, line)) = state.lines.first() {
+                println!("  ♪ {line}");
+            }
+            Ok(state)
         }
+        _ => Ok(LyricsState::default()),
     }
-    Ok(())
 }
 
 async fn cmd_playlist(
@@ -885,7 +977,7 @@ async fn cmd_playlist(
             r#loop,
             random,
         } => {
-            play_local_playlist(api, store, cfg, &id_or_name, r#loop, random).await?;
+            play_local_playlist(api, paths, store, cfg, &id_or_name, r#loop, random).await?;
         }
     }
     Ok(())

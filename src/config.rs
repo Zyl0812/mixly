@@ -105,6 +105,8 @@ pub struct AppPaths {
     pub qq_token: PathBuf,
     /// Bilibili 扫码登录会话（仅保存必要 Cookie 字段，禁止写入日志）
     pub bilibili_token: PathBuf,
+    /// 播放状态快照（`mixly status --claude` 读取）
+    pub now_playing: PathBuf,
     /// 本地音乐库索引
     pub local_library: PathBuf,
 }
@@ -120,6 +122,7 @@ impl AppPaths {
             netease_token: config_dir.join("netease_token.json"),
             qq_token: config_dir.join("qq_token.json"),
             bilibili_token: config_dir.join("bilibili_token.json"),
+            now_playing: config_dir.join("now-playing.json"),
             local_library: config_dir.join("local_library.json"),
             config_dir,
         })

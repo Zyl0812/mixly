@@ -7,6 +7,9 @@ description: >
   Use when the user asks to play or recommend music, says "推荐一首歌", "随便放一首",
   "不知道听什么", "用 mixly", "放首歌", "建歌单", "导入本地", or runs /mixly.
   Do not use for implementing mixly itself unless the user is coding the player.
+allowed-tools:
+  - Bash(mixly *)
+  - PowerShell(mixly *)
 ---
 
 # mixly 操作手册
@@ -46,6 +49,7 @@ mixly config prefer qq|netease|bilibili              # 搜索优先侧持久化�
 mixly config show
 mixly --prefer netease <子命令>                       # 仅本次覆盖优先侧
 mixly --proxy socks5://127.0.0.1:7890 <子命令>        # 需代理时
+mixly status --claude                                # Claude Code 状态栏（安装插件后自动刷新）
 ```
 
 配置与 token 在 `%APPDATA%\mixly\`。

@@ -10,6 +10,7 @@ pub mod prefetch;
 pub mod qr_term;
 pub mod relay;
 pub mod skill;
+pub mod status;
 pub mod tui;
 
 pub use local::LocalLibrary;

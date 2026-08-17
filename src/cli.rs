@@ -180,6 +180,15 @@ pub enum Commands {
     },
     /// 启动交互式终端界面（TUI）
     Tui,
+    /// 读取当前播放状态（不启动播放器；用于 Claude Code status line）
+    Status {
+        /// 输出 JSON（机器可读）
+        #[arg(long)]
+        json: bool,
+        /// 输出 Claude Code status line（读取 COLUMNS，两行/三行自适应）
+        #[arg(long)]
+        claude: bool,
+    },
     /// 查看 / 修改本地配置（如双平台优先侧）
     Config {
         #[command(subcommand)]
