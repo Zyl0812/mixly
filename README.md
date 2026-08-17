@@ -20,7 +20,7 @@
 
 | TUI 播放界面 | Claude Code 插件与状态栏 |
 |:---:|:---:|
-| <img src="assets/screenshots/tui.png" alt="Mixly TUI 播放界面" width="100%"> | <img src="assets/screenshots/claude-plugin.png" alt="Mixly Claude Code 插件与状态栏" width="100%"> |
+| <img src="assets/screenshots/tui.png" alt="Mixly TUI 播放界面" width="440"> | <img src="assets/screenshots/claude-plugin.png" alt="Mixly Claude Code 插件与状态栏" width="440"> |
 
 ## 特性
 

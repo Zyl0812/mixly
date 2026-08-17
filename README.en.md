@@ -20,7 +20,7 @@
 
 | TUI player | Claude Code plugin and status line |
 |:---:|:---:|
-| <img src="assets/screenshots/tui.png" alt="Mixly TUI player" width="100%"> | <img src="assets/screenshots/claude-plugin.png" alt="Mixly Claude Code plugin and status line" width="100%"> |
+| <img src="assets/screenshots/tui.png" alt="Mixly TUI player" width="440"> | <img src="assets/screenshots/claude-plugin.png" alt="Mixly Claude Code plugin and status line" width="440"> |
 
 ## Features
 
