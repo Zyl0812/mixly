@@ -40,6 +40,10 @@ const CLAUDE_PLAY_SKILL: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/claude-plugin/skills/play/SKILL.md"
 ));
+const CLAUDE_MIXLY_SKILL: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/claude-plugin/skills/mixly/SKILL.md"
+));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SkillAgent {
@@ -153,7 +157,7 @@ fn legacy_claude_plugin_dir() -> Result<PathBuf> {
     Ok(claude_home()?.join("plugins").join("mixly"))
 }
 
-fn marketplace_files(root: &Path) -> [(PathBuf, &'static str); 3] {
+fn marketplace_files(root: &Path) -> [(PathBuf, &'static str); 4] {
     [
         (
             root.join(".claude-plugin").join("marketplace.json"),
@@ -165,6 +169,14 @@ fn marketplace_files(root: &Path) -> [(PathBuf, &'static str); 3] {
                 .join(".claude-plugin")
                 .join("plugin.json"),
             CLAUDE_PLUGIN_MANIFEST,
+        ),
+        (
+            root.join("plugins")
+                .join("mixly")
+                .join("skills")
+                .join("mixly")
+                .join("SKILL.md"),
+            CLAUDE_MIXLY_SKILL,
         ),
         (
             root.join("plugins")
@@ -224,6 +236,7 @@ fn remove_marketplace_at(root: &Path, force: bool) -> Result<bool> {
         }
     }
     for dir in [
+        root.join("plugins/mixly/skills/mixly"),
         root.join("plugins/mixly/skills/play"),
         root.join("plugins/mixly/skills"),
         root.join("plugins/mixly/.claude-plugin"),
@@ -524,6 +537,23 @@ pub fn preflight_claude_plugin_uninstall(force: bool) -> Result<()> {
     preflight_claude_plugin_files(force)
 }
 
+/// 只配置 Claude Code 主状态栏，不安装或替换插件。
+pub fn install_claude_status_line(force: bool) -> Result<(PathBuf, bool)> {
+    run_claude(&["--version"])?;
+    let settings = claude_settings_path()?;
+    let backup = claude_status_line_backup_path()?;
+    let changed = configure_status_line_at(&settings, &backup, force)?;
+    Ok((settings, changed))
+}
+
+/// 只移除 Mixly 状态栏，保留插件和其他 Claude Code 配置。
+pub fn uninstall_claude_status_line(force: bool) -> Result<(PathBuf, bool)> {
+    let settings = claude_settings_path()?;
+    let backup = claude_status_line_backup_path()?;
+    let changed = remove_status_line_at(&settings, &backup, force)?;
+    Ok((settings, changed))
+}
+
 /// 安装 Claude 插件：生成本地 marketplace、交给 Claude Code 注册，再配置 statusLine。
 pub fn install_claude_plugin(force: bool) -> Result<(PathBuf, bool)> {
     let settings = claude_settings_path()?;
@@ -739,11 +769,20 @@ mod tests {
 
         assert!(stage_marketplace_at(&root, false).unwrap());
         assert!(!stage_marketplace_at(&root, false).unwrap());
+        assert_eq!(
+            fs::read_to_string(root.join("plugins/mixly/skills/mixly/SKILL.md")).unwrap(),
+            MIXLY_SKILL
+        );
         let skill = root.join("plugins/mixly/skills/play/SKILL.md");
         fs::write(&skill, "user edit").unwrap();
         assert!(stage_marketplace_at(&root, false).is_err());
         assert!(stage_marketplace_at(&root, true).unwrap());
         assert_eq!(fs::read_to_string(skill).unwrap(), CLAUDE_PLAY_SKILL);
+    }
+
+    #[test]
+    fn public_plugin_mixly_skill_matches_standalone_skill() {
+        assert_eq!(CLAUDE_MIXLY_SKILL, MIXLY_SKILL);
     }
 
     #[test]

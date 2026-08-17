@@ -37,11 +37,12 @@ mixly play bilibili BV1xx411c7mD             # B站 视频音频
 mixly play "通勤" --playlist --loop           # 歌单播放
 mixly playlist play "通勤" --random           # 随机播放歌单
 mixly status --json                          # 机器可读状态（调试用）
+mixly statusline install                     # 单独安装/修复 Claude Code 状态栏
 mixly logout --platform bilibili             # 退出登录并删除本机凭证
 ```
 
 ## 出错时
 
-- 状态栏一直空白 → 确认 `mixly play` 在后台运行，且 `mixly status --claude` 手动有输出。
+- 状态栏未配置 → 执行 `mixly statusline install`；一直空白则确认 `mixly play` 在后台运行，且 `mixly status --claude` 手动有输出。
 - 播放链接空 / 播放错误 → 让用户 `login`，或换平台/换曲。
 - 退出码非 0 → 把 stderr 关键信息摘要给用户再决定换策略。

@@ -1,0 +1,18 @@
+{
+  "name": "mixly",
+  "owner": {
+    "name": "Zyl0812",
+    "url": "https://github.com/Zyl0812"
+  },
+  "description": "Mixly integrations for Claude Code",
+  "plugins": [
+    {
+      "name": "mixly",
+      "source": "./claude-plugin",
+      "description": "Control Mixly playback and show song progress and lyrics in Claude Code",
+      "homepage": "https://github.com/Zyl0812/mixly",
+      "repository": "https://github.com/Zyl0812/mixly",
+      "license": "MIT"
+    }
+  ]
+}

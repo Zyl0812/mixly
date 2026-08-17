@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use mixly::cli::{
     Cli, Commands, ConfigCmd, LocalCmd, LoginPlatform, PlatformArg, PlaylistCmd, PreferArg,
-    SkillCmd,
+    SkillCmd, StatusLineCmd,
 };
 use mixly::config::{
     default_mpv_socket_path, inject_proxy_env, load_config, mask_proxy_url,
@@ -41,6 +41,14 @@ fn main() {
 
     if let Commands::Skill { action } = &cli.command {
         if let Err(e) = cmd_skill(action) {
+            eprintln!("错误: {e:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if let Commands::Statusline { action } = &cli.command {
+        if let Err(e) = cmd_statusline(action) {
             eprintln!("错误: {e:#}");
             std::process::exit(1);
         }
@@ -146,6 +154,9 @@ async fn async_main(
         Commands::Config { action } => cmd_config(&paths, cfg, action),
         Commands::Status { .. } => unreachable!("status handled before runtime setup"),
         Commands::Skill { .. } => unreachable!("skill command handled before runtime setup"),
+        Commands::Statusline { .. } => {
+            unreachable!("statusline command handled before runtime setup")
+        }
     }
 }
 
@@ -246,6 +257,30 @@ fn cmd_skill(action: &SkillCmd) -> Result<()> {
             "{}",
             skill_file_path(*agent, skill_scope(*global, *project))?.display()
         ),
+    }
+    Ok(())
+}
+
+fn cmd_statusline(action: &StatusLineCmd) -> Result<()> {
+    match action {
+        StatusLineCmd::Install { force } => {
+            let (path, changed) = mixly::skill::install_claude_status_line(*force)?;
+            if changed {
+                println!("Installed Mixly status line in:");
+            } else {
+                println!("Mixly status line is already configured in:");
+            }
+            println!("{}", path.display());
+        }
+        StatusLineCmd::Uninstall { force } => {
+            let (path, changed) = mixly::skill::uninstall_claude_status_line(*force)?;
+            if changed {
+                println!("Removed Mixly status line from:");
+            } else {
+                println!("Mixly status line was not configured in:");
+            }
+            println!("{}", path.display());
+        }
     }
     Ok(())
 }
@@ -758,7 +793,7 @@ async fn play_songs(
                     }
 
                     // 写入播放状态，供 `mixly status --claude` 读取
-                    lyrics_state.update_index(snap.time_pos);
+                    lyrics_state.update_index(snap.time_pos + if snap.paused { 0.0 } else { 0.8 });
                     let np = mixly::status::NowPlaying {
                         version: mixly::status::NOW_PLAYING_VERSION,
                         pid: std::process::id(),

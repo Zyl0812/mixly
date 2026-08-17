@@ -199,6 +199,27 @@ pub enum Commands {
         #[command(subcommand)]
         action: SkillCmd,
     },
+    /// 安装或移除 Claude Code 播放状态栏
+    Statusline {
+        #[command(subcommand)]
+        action: StatusLineCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum StatusLineCmd {
+    /// 配置 Mixly 状态栏；已有状态栏会被保留并组合
+    Install {
+        /// 覆盖冲突的 Mixly 状态栏配置
+        #[arg(long)]
+        force: bool,
+    },
+    /// 移除 Mixly 状态栏并恢复原配置
+    Uninstall {
+        /// 状态栏后来被修改时仍移除 Mixly 前缀
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]

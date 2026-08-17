@@ -36,7 +36,15 @@ if (-not (Get-Command mpv -ErrorAction SilentlyContinue)) {
 
 Write-Host "==> installed: $Dest\mixly.exe"
 Write-Host ''
-Write-Host 'Optional agent integration:'
+Write-Host 'Claude Code integration (public marketplace):'
+Write-Host '  claude plugin marketplace add Zyl0812/mixly --scope user'
+Write-Host '  claude plugin install mixly@mixly --scope user'
+Write-Host '  mixly statusline install'
+Write-Host '  then run /reload-plugins in the current Claude Code session'
+Write-Host ''
+Write-Host 'Local embedded Claude plugin alternative:'
 Write-Host '  mixly skill install claude --global'
+Write-Host ''
+Write-Host 'Other agent skills:'
 Write-Host '  mixly skill install codex --global'
 Write-Host '  mixly skill install grok --global'
