@@ -56,17 +56,29 @@ fn print_png_as_blocks(png: &[u8]) -> Result<()> {
         bail!("二维码图片尺寸无效");
     }
 
+    // QQ Music's PNG has no quiet zone; scanners require four blank modules.
+    let padding = if has_dark_edge(&img) { 4 } else { 0 };
     let step = estimate_module_step(&img).max(1);
-    let cols = (w / step).max(1);
-    let rows = (h / step).max(1);
+    let cols = if padding > 0 {
+        estimate_edge_to_edge_modules(&img).unwrap_or_else(|| (w / step).max(1))
+    } else {
+        (w / step).max(1)
+    };
+    let rows = if padding > 0 { cols } else { (h / step).max(1) };
+    let blank_line = " ".repeat(((cols + padding * 2) * 2) as usize);
+
+    for _ in 0..padding {
+        println!("{blank_line}");
+    }
 
     // Pair rows with half-block chars when possible for denser output;
     // use full blocks for simplicity and scan reliability.
     for row in 0..rows {
-        let mut line = String::with_capacity((cols as usize) * 2);
+        let mut line = String::with_capacity(((cols + padding * 2) * 2) as usize);
+        line.push_str(&" ".repeat((padding * 2) as usize));
         for col in 0..cols {
-            let x = (col * step + step / 2).min(w - 1);
-            let y = (row * step + step / 2).min(h - 1);
+            let x = ((2 * col + 1) * w / (2 * cols)).min(w - 1);
+            let y = ((2 * row + 1) * h / (2 * rows)).min(h - 1);
             let dark = img.get_pixel(x, y).0[0] < 128;
             if dark {
                 line.push('█');
@@ -76,9 +88,44 @@ fn print_png_as_blocks(png: &[u8]) -> Result<()> {
                 line.push(' ');
             }
         }
+        line.push_str(&" ".repeat((padding * 2) as usize));
         println!("{line}");
     }
+    for _ in 0..padding {
+        println!("{blank_line}");
+    }
     Ok(())
+}
+
+fn has_dark_edge(img: &image::GrayImage) -> bool {
+    let (w, h) = img.dimensions();
+    (0..w).any(|x| img.get_pixel(x, 0).0[0] < 128 || img.get_pixel(x, h - 1).0[0] < 128)
+        || (0..h).any(|y| img.get_pixel(0, y).0[0] < 128 || img.get_pixel(w - 1, y).0[0] < 128)
+}
+
+/// Infer an edge-to-edge QR grid from its 1:1:3:1:1 top-left finder pattern.
+fn estimate_edge_to_edge_modules(img: &image::GrayImage) -> Option<u32> {
+    let (w, h) = img.dimensions();
+    let finder_width = (0..h / 3).find_map(|y| {
+        let mut runs = [0u32; 5];
+        let mut x = 0;
+        let mut dark = true;
+        for run in &mut runs {
+            while x < w && (img.get_pixel(x, y).0[0] < 128) == dark {
+                *run += 1;
+                x += 1;
+            }
+            dark = !dark;
+        }
+        let unit_min = runs[0].min(runs[1]).min(runs[3]).min(runs[4]);
+        let unit_max = runs[0].max(runs[1]).max(runs[3]).max(runs[4]);
+        (unit_min > 0 && unit_max - unit_min <= 2 && runs[2] >= unit_min * 2)
+            .then_some(runs.into_iter().sum::<u32>())
+    })?;
+
+    (21..=177)
+        .step_by(4)
+        .min_by_key(|modules| (finder_width * modules).abs_diff(w * 7))
 }
 
 /// Heuristic: module size from first dark-run length near the finder pattern.
@@ -153,6 +200,8 @@ pub fn decode_base64(input: &str) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use qrcode::types::Color;
+    use qrcode::EcLevel;
 
     #[test]
     fn print_text_qr_does_not_panic() {
@@ -176,5 +225,51 @@ mod tests {
 
         // Text payload entry
         print_qr_payload("https://y.qq.com/test").unwrap();
+    }
+
+    #[test]
+    fn detects_missing_png_quiet_zone() {
+        let mut edge_to_edge = image::GrayImage::from_pixel(3, 3, image::Luma([255]));
+        edge_to_edge.put_pixel(0, 1, image::Luma([0]));
+        assert!(has_dark_edge(&edge_to_edge));
+
+        let mut padded = image::GrayImage::from_pixel(9, 9, image::Luma([255]));
+        padded.put_pixel(4, 4, image::Luma([0]));
+        assert!(!has_dark_edge(&padded));
+    }
+
+    #[test]
+    fn recovers_modules_from_qq_style_scaled_png() {
+        let code = QrCode::with_error_correction_level(
+            b"https://c6.y.qq.com/base/fcgi-bin/u?__=123456789012",
+            EcLevel::L,
+        )
+        .unwrap();
+        assert_eq!(code.width(), 29);
+
+        let size = 150u32;
+        let modules = code.width() as u32;
+        let img = image::GrayImage::from_fn(size, size, |x, y| {
+            let col = (x * modules / size) as usize;
+            let row = (y * modules / size) as usize;
+            image::Luma([if code[(col, row)] == Color::Dark {
+                0
+            } else {
+                255
+            }])
+        });
+
+        let detected = estimate_edge_to_edge_modules(&img).unwrap();
+        assert_eq!(detected, modules);
+        for row in 0..detected {
+            for col in 0..detected {
+                let x = (2 * col + 1) * size / (2 * detected);
+                let y = (2 * row + 1) * size / (2 * detected);
+                assert_eq!(
+                    img.get_pixel(x, y).0[0] < 128,
+                    code[(col as usize, row as usize)] == Color::Dark
+                );
+            }
+        }
     }
 }
