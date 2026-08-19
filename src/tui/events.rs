@@ -23,7 +23,10 @@ pub enum AppEvent {
     SeekForward,
     SeekBack,
     CycleMode,
-    FocusNext,
+    /// Tab：切到下一个歌单（方案 C 里歌单是顶部标签行）
+    NextPlaylist,
+    /// ⇧Tab：切到上一个歌单
+    PrevPlaylist,
     /// v：列表模式 ⇄ 播放页
     ToggleView,
     /// b：播放页封面 Unicode 块 ⇄ 纯 ASCII
@@ -100,7 +103,8 @@ fn map_key_normal(key: KeyEvent) -> AppEvent {
         KeyCode::Char('b') => AppEvent::ToggleLogoStyle,
         KeyCode::Char('Q') => AppEvent::ToggleQueue,
         KeyCode::Char('?') => AppEvent::ToggleHelp,
-        KeyCode::Tab => AppEvent::FocusNext,
+        KeyCode::Tab => AppEvent::NextPlaylist,
+        KeyCode::BackTab => AppEvent::PrevPlaylist,
         KeyCode::Backspace => AppEvent::Backspace,
         KeyCode::Char(c) => AppEvent::Char(c),
         _ => AppEvent::Tick,
@@ -121,6 +125,22 @@ mod tests {
         assert_eq!(map_key_normal(key('Q')), AppEvent::ToggleQueue);
         assert_eq!(map_key_normal(key('?')), AppEvent::ToggleHelp);
         assert_eq!(map_key_normal(key('q')), AppEvent::Quit);
+    }
+
+    /// 方案 C：Tab 从「切焦点」改成「切歌单」，⇧Tab 反向。
+    /// 歌单切换不能用 ← / →（那是 seek）也不能用 n（那是下一首）。
+    #[test]
+    fn tab_switches_playlists_without_stealing_seek_or_next() {
+        let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let back_tab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE);
+        assert_eq!(map_key_normal(tab), AppEvent::NextPlaylist);
+        assert_eq!(map_key_normal(back_tab), AppEvent::PrevPlaylist);
+
+        let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        let left = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        assert_eq!(map_key_normal(right), AppEvent::SeekForward);
+        assert_eq!(map_key_normal(left), AppEvent::SeekBack);
+        assert_eq!(map_key_normal(key('n')), AppEvent::Next);
     }
 
     #[test]

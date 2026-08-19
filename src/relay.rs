@@ -260,7 +260,7 @@ async fn handle_conn(
                 return Ok(());
             }
             // One refresh retry on failure (expired link / 403).
-            warn!(error = %e, "relay upstream failed; trying refresh once");
+            warn!(error = ?e, "relay upstream failed; trying refresh once");
             if let Some(ref hook) = track.refresh {
                 match hook().await {
                     Ok(new_url) if !new_url.is_empty() => {

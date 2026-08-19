@@ -49,13 +49,3 @@ pub fn player_strip() -> Style {
 pub fn selected() -> Style {
     Style::default().bg(ACCENT_SOFT).fg(TEXT)
 }
-/// 面板标题：聚焦时用赭石色，否则中性
-pub fn pane_title(focused: bool) -> Style {
-    if focused {
-        Style::default()
-            .fg(ACCENT_DEEP)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(FAINT)
-    }
-}

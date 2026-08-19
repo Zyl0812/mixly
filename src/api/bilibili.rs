@@ -552,9 +552,38 @@ impl BilibiliClient {
             .as_array()
             .cloned()
             .unwrap_or_default();
-        let best = pick_best_audio(&audio)
+        let candidates = pick_best_audio_urls(&audio);
+        let (first, rest) = candidates
+            .split_first()
             .context("该视频没有可用普通音频流（可能是付费、地区或 DRM 限制）")?;
-        abs_url(&best).context("音频链接无效")
+        if rest.is_empty() {
+            return Ok(first.clone());
+        }
+        Ok(self.first_reachable(bvid, &candidates).await)
+    }
+
+    /// baseUrl 所在 CDN 可能被本地网络/代理屏蔽，逐个探测候选镜像，
+    /// 返回首个可达者；全部不可达时返回第一个，让播放路径给出原始错误。
+    async fn first_reachable(&self, bvid: &str, candidates: &[String]) -> String {
+        let referer = format!("{REFERER}video/{bvid}");
+        for url in candidates {
+            let resp = self
+                .http
+                .get(url)
+                .header("referer", &referer)
+                .header("user-agent", UA)
+                .header("range", "bytes=0-0")
+                .timeout(Duration::from_secs(6))
+                .send()
+                .await;
+            match resp {
+                Ok(r) if r.status().is_success() => return url.clone(),
+                Ok(r) => debug!(status = %r.status(), url = %url, "bilibili CDN 候选不可用"),
+                Err(e) => debug!(error = %e, url = %url, "bilibili CDN 候选不可达"),
+            }
+        }
+        warn!("Bilibili 所有 CDN 候选均不可达，回退首个链接");
+        candidates[0].clone()
     }
 }
 
@@ -865,10 +894,11 @@ pub fn abs_url(s: &str) -> Option<String> {
     None
 }
 
-/// 选择普通 DASH 音频中带宽最高的候选。特殊音轨（dolby/flac）在真实响应中
-/// 位于独立字段，不会出现在普通 `dash.audio` 数组里。
-pub fn pick_best_audio(audio: &[Value]) -> Option<String> {
-    audio
+/// 选择普通 DASH 音频中带宽最高的候选，返回其全部链接：`baseUrl` 在前，
+/// `backupUrl` 镜像在后。特殊音轨（dolby/flac）在真实响应中位于独立字段，
+/// 不会出现在普通 `dash.audio` 数组里。
+pub fn pick_best_audio_urls(audio: &[Value]) -> Vec<String> {
+    let best = audio
         .iter()
         .filter(|a| {
             a.get("baseUrl")
@@ -879,12 +909,21 @@ pub fn pick_best_audio(audio: &[Value]) -> Option<String> {
         .max_by(|a, b| {
             let bw = |x: &Value| x.get("bandwidth").and_then(|v| v.as_u64()).unwrap_or(0);
             bw(a).cmp(&bw(b))
-        })
-        .and_then(|a| {
-            a.get("baseUrl")
-                .and_then(|u| u.as_str())
-                .map(|s| s.to_string())
-        })
+        });
+    let Some(best) = best else {
+        return Vec::new();
+    };
+    let backups = best
+        .get("backupUrl")
+        .and_then(|b| b.as_array())
+        .map(|a| a.as_slice())
+        .unwrap_or_default();
+    best.get("baseUrl")
+        .into_iter()
+        .chain(backups)
+        .filter_map(|u| u.as_str())
+        .filter_map(abs_url)
+        .collect()
 }
 
 /// 平台错误码 → 可理解提示。
@@ -1041,15 +1080,27 @@ mod tests {
     }
 
     #[test]
-    fn pick_best_audio_prefers_highest_bandwidth() {
+    fn pick_best_audio_prefers_highest_bandwidth_then_backups() {
         let audio: Vec<Value> = vec![
             serde_json::json!({ "id": 30216, "bandwidth": 314713, "baseUrl": "https://a/mid" }),
-            serde_json::json!({ "id": 30232, "bandwidth": 614713, "baseUrl": "https://a/high" }),
+            serde_json::json!({
+                "id": 30232,
+                "bandwidth": 614713,
+                "baseUrl": "https://a/high",
+                "backupUrl": ["https://mirror1/high", "//mirror2/high", "ftp://bad"]
+            }),
             // 带宽更高但 baseUrl 为空 → 跳过
             serde_json::json!({ "id": 30280, "bandwidth": 1204713, "baseUrl": "" }),
         ];
-        assert_eq!(pick_best_audio(&audio), Some("https://a/high".to_string()));
-        assert_eq!(pick_best_audio(&[]), None);
+        assert_eq!(
+            pick_best_audio_urls(&audio),
+            vec![
+                "https://a/high".to_string(),
+                "https://mirror1/high".to_string(),
+                "https://mirror2/high".to_string(),
+            ]
+        );
+        assert!(pick_best_audio_urls(&[]).is_empty());
     }
 
     #[test]
@@ -1240,7 +1291,7 @@ mod tests {
         let v = fixture("playurl_dash.json");
         let audio = v["data"]["dash"]["audio"].as_array().unwrap();
         assert_eq!(
-            pick_best_audio(audio).as_deref(),
+            pick_best_audio_urls(audio).first().map(|s| s.as_str()),
             Some("https://upcdn.example.invalid/audio_high.m4s")
         );
         let no = fixture("playurl_no_audio.json");
@@ -1248,7 +1299,7 @@ mod tests {
             .as_array()
             .cloned()
             .unwrap_or_default();
-        assert_eq!(pick_best_audio(&audio2), None);
+        assert!(pick_best_audio_urls(&audio2).is_empty());
     }
 
     #[test]

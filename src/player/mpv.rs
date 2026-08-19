@@ -20,7 +20,9 @@ pub struct PlaybackSnapshot {
     pub time_pos: f64,
     pub duration: f64,
     pub paused: bool,
-    pub volume: f64,
+    /// 输出设备音量（mpv `ao-volume`），也就是系统音量合成器里 mixly 那一条。
+    /// 首次 loadfile 之前 AO 还没初始化，属性不可用，此时为 None。
+    pub volume: Option<f64>,
     pub eof: bool,
 }
 
@@ -30,7 +32,6 @@ pub struct MpvPlayer {
     mpv_path: String,
     /// Last successfully loaded URL (local relay), for crash recovery.
     last_url: Option<String>,
-    last_volume: f64,
 }
 
 impl MpvPlayer {
@@ -69,7 +70,6 @@ impl MpvPlayer {
             socket_path: socket_path.to_string(),
             mpv_path: mpv_path.to_string(),
             last_url: None,
-            last_volume: 100.0,
         };
 
         // Wait until IPC is ready.
@@ -148,11 +148,13 @@ impl MpvPlayer {
         Ok(next)
     }
 
-    pub async fn set_volume(&mut self, volume: f64) -> Result<()> {
+    /// 写 `ao-volume` 而不是 `volume`：前者就是系统音量合成器里 mixly 那一条，
+    /// 双向同步；后者只是 mpv 内部的软件增益，跟系统完全无关，界面上永远对不上。
+    /// AO 未初始化（首次 loadfile 之前）时 mpv 会拒绝该属性，这里如实返回错误。
+    pub async fn set_volume(&self, volume: f64) -> Result<()> {
         let volume = volume.clamp(0.0, 100.0);
-        self.command(json!(["set_property", "volume", volume]))
+        self.command(json!(["set_property", "ao-volume", volume]))
             .await?;
-        self.last_volume = volume;
         Ok(())
     }
 
@@ -165,7 +167,9 @@ impl MpvPlayer {
         let time_pos = self.get_number("time-pos").await.unwrap_or(0.0);
         let duration = self.get_number("duration").await.unwrap_or(0.0);
         let paused = self.get_bool("pause").await.unwrap_or(false);
-        let volume = self.get_number("volume").await.unwrap_or(100.0);
+        // ponytail: ao-volume 只在 AO 支持时可用（Windows wasapi、Linux pulse 都行，
+        // ALSA 不行）。拿不到就是 None，界面显示「--」而不是编一个数出来。
+        let volume = self.get_number("ao-volume").await.ok();
         let eof = self.get_bool("eof-reached").await.unwrap_or(false);
         Ok(PlaybackSnapshot {
             time_pos,
@@ -194,21 +198,21 @@ impl MpvPlayer {
         matches!(self.child.try_wait(), Ok(None))
     }
 
-    /// Restart mpv if the process died; reload last URL and volume.
+    /// Restart mpv if the process died; reload last URL.
+    ///
+    /// 音量不需要在这里恢复：`ao-volume` 是系统按可执行文件记住的会话音量，
+    /// mpv 重启后 Windows 会自己带回来，我们再写一遍反而会覆盖用户在合成器里的改动。
     pub async fn ensure_alive(&mut self) -> Result<()> {
         if self.is_running() {
             return Ok(());
         }
         warn!("mpv process died; restarting");
         let last = self.last_url.clone();
-        let vol = self.last_volume;
         let path = self.mpv_path.clone();
         let sock = self.socket_path.clone();
         // Drop old child
         let _ = self.child.kill().await;
         *self = Self::spawn(&path, &sock).await?;
-        self.last_volume = vol;
-        let _ = self.set_volume(vol).await;
         if let Some(url) = last {
             self.loadfile(&url).await?;
         }

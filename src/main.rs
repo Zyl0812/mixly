@@ -27,6 +27,7 @@ use mixly::tui::run_tui;
 use mixly::{ApiClient, LyricsState, Platform, PlayMode, Song};
 use tokio::sync::Mutex;
 use tracing::warn;
+use tracing_subscriber::fmt::writer::BoxMakeWriter;
 
 fn main() {
     let cli = Cli::parse();
@@ -69,19 +70,24 @@ fn main() {
     // Must run before Tokio threads exist.
     inject_proxy_env(&decision);
 
-    // TUI 用备用屏；默认 info 会把「resolved play url / relay / mpv」等日志打到终端，
-    // 看起来像弹窗/刷屏。TUI 默认只显示 warn 及以上；需要详细日志时设 RUST_LOG=info。
-    let default_filter = match &cli.command {
-        Commands::Tui => "warn",
-        _ => "info",
+    // TUI 用备用屏，任何写 stderr 的日志（哪怕只是 warn）都会糊在界面上：改写日志文件。
+    // ponytail: 每次启动截断，不做轮转；真嫌大再加。
+    let log_file = matches!(cli.command, Commands::Tui)
+        .then(|| std::fs::File::create(paths.config_dir.join("mixly.log")).ok())
+        .flatten();
+    let to_file = log_file.is_some();
+    let writer = match log_file {
+        Some(f) => BoxMakeWriter::new(std::sync::Mutex::new(f)),
+        None => BoxMakeWriter::new(std::io::stderr),
     };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter)),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with_target(false)
-        .with_writer(std::io::stderr)
+        .with_ansi(!to_file)
+        .with_writer(writer)
         .init();
 
     match &decision {

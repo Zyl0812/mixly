@@ -22,9 +22,10 @@ use crate::player::{MpvPlayer, PlaybackSnapshot};
 use crate::playlist::{PlayQueue, PlaylistStore};
 use crate::relay::AudioRelay;
 
+/// 方案 C 里歌单是顶部标签行（Tab / ⇧Tab 切换），不再是一个可聚焦的面板，
+/// 所以列表主体只有「当前歌单的歌」和「搜索结果」两种内容。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusPane {
-    Playlists,
     Songs,
     Search,
 }
@@ -70,7 +71,7 @@ pub struct App {
     pub view: ViewMode,
     /// b 切换：播放页封面用纯 ASCII 渲染（块字符错位时的回退），默认 Unicode
     pub logo_ascii: bool,
-    /// Q 切换：列表模式右侧的播放队列面板
+    /// Q 切换：播放队列浮层（方案 C 把常驻队列列换成了按需浮层）
     pub show_queue: bool,
     /// ? 切换：快捷键浮层
     pub show_help: bool,
@@ -107,7 +108,7 @@ pub async fn run_tui(deps: TuiDeps) -> Result<()> {
         song_cursor: 0,
         search_results: Vec::new(),
         search_cursor: 0,
-        focus: FocusPane::Playlists,
+        focus: FocusPane::Songs,
         input_mode: InputMode::Normal,
         input_buffer: String::new(),
         queue: PlayQueue::default(),
@@ -118,7 +119,7 @@ pub async fn run_tui(deps: TuiDeps) -> Result<()> {
         error: None,
         view: ViewMode::List,
         logo_ascii: false,
-        show_queue: true,
+        show_queue: false,
         show_help: false,
         quality: deps.quality,
         login_netease: deps.api.is_logged_in(Platform::Netease),
@@ -236,14 +237,23 @@ async fn run_loop(
 
         match ev {
             AppEvent::Quit => break,
-            AppEvent::Escape => break,
+            // Esc 先退出搜索结果视图，没有搜索结果时才退出程序
+            AppEvent::Escape => {
+                if app.search_results.is_empty() {
+                    break;
+                }
+                app.search_results.clear();
+                app.search_cursor = 0;
+                app.focus = FocusPane::Songs;
+                app.status_message = "已返回歌单".into();
+            }
             AppEvent::ToggleHelp => app.show_help = true,
             AppEvent::ToggleQueue => {
                 app.show_queue = !app.show_queue;
                 app.status_message = if app.show_queue {
-                    "队列面板：开".into()
+                    "队列浮层：开".into()
                 } else {
-                    "队列面板：关".into()
+                    "队列浮层：关".into()
                 };
             }
             AppEvent::ToggleView => {
@@ -257,27 +267,9 @@ async fn run_loop(
                     "封面：Unicode".into()
                 };
             }
-            AppEvent::FocusNext => {
-                app.view = ViewMode::List;
-                app.focus = match app.focus {
-                    FocusPane::Playlists => FocusPane::Songs,
-                    FocusPane::Songs => {
-                        if app.search_results.is_empty() {
-                            FocusPane::Playlists
-                        } else {
-                            FocusPane::Search
-                        }
-                    }
-                    FocusPane::Search => FocusPane::Playlists,
-                };
-            }
+            AppEvent::NextPlaylist => shift_playlist(app, 1),
+            AppEvent::PrevPlaylist => shift_playlist(app, -1),
             AppEvent::Up => match app.focus {
-                FocusPane::Playlists => {
-                    if app.playlist_cursor > 0 {
-                        app.playlist_cursor -= 1;
-                        app.song_cursor = 0;
-                    }
-                }
                 FocusPane::Songs => {
                     if app.song_cursor > 0 {
                         app.song_cursor -= 1;
@@ -290,12 +282,6 @@ async fn run_loop(
                 }
             },
             AppEvent::Down => match app.focus {
-                FocusPane::Playlists => {
-                    if app.playlist_cursor + 1 < app.playlists.len() {
-                        app.playlist_cursor += 1;
-                        app.song_cursor = 0;
-                    }
-                }
                 FocusPane::Songs => {
                     let len = app
                         .playlists
@@ -313,7 +299,7 @@ async fn run_loop(
                 }
             },
             AppEvent::Enter => match app.focus {
-                FocusPane::Playlists | FocusPane::Songs => {
+                FocusPane::Songs => {
                     if let Some(pl) = app.playlists.get(app.playlist_cursor) {
                         app.queue = PlayQueue::from_songs(pl.songs.clone());
                         app.queue.jump(app.song_cursor);
@@ -370,16 +356,8 @@ async fn run_loop(
                     app.status_message = "请先选中搜索结果与目标歌单".into();
                 }
             }
-            AppEvent::VolumeUp => {
-                let mut player = deps.player.lock().await;
-                let v = (app.snap.volume + 5.0).min(100.0);
-                let _ = player.set_volume(v).await;
-            }
-            AppEvent::VolumeDown => {
-                let mut player = deps.player.lock().await;
-                let v = (app.snap.volume - 5.0).max(0.0);
-                let _ = player.set_volume(v).await;
-            }
+            AppEvent::VolumeUp => nudge_volume(app, deps, 5.0).await,
+            AppEvent::VolumeDown => nudge_volume(app, deps, -5.0).await,
             AppEvent::SeekForward => {
                 let player = deps.player.lock().await;
                 let _ = player.seek_relative(5.0).await;
@@ -410,6 +388,37 @@ async fn run_loop(
         }
     }
     Ok(())
+}
+
+/// Tab / ⇧Tab 切歌单。切走时丢掉搜索结果，回到该歌单的歌曲列表。
+fn shift_playlist(app: &mut App, delta: i32) {
+    let n = app.playlists.len();
+    if n == 0 {
+        app.status_message = "还没有歌单".into();
+        return;
+    }
+    let cur = app.playlist_cursor as i32;
+    app.playlist_cursor = (cur + delta).rem_euclid(n as i32) as usize;
+    app.song_cursor = 0;
+    app.search_results.clear();
+    app.search_cursor = 0;
+    app.focus = FocusPane::Songs;
+    app.view = ViewMode::List;
+}
+
+/// `+` / `-` 调音量。失败不再吞掉——音量看不见就是当初被删掉的原因。
+async fn nudge_volume(app: &mut App, deps: &TuiDeps, delta: f64) {
+    let Some(cur) = app.snap.volume else {
+        // AO 要等第一次 loadfile 才初始化，此前 ao-volume 根本不存在。
+        app.status_message = "先放一首歌才能调音量".into();
+        return;
+    };
+    let next = (cur + delta).clamp(0.0, 100.0);
+    let player = deps.player.lock().await;
+    match player.set_volume(next).await {
+        Ok(()) => app.status_message = format!("音量 {next:.0}%"),
+        Err(e) => app.error = Some(format!("音量设置失败: {e}")),
+    }
 }
 
 async fn load_after_eof(app: &mut App, deps: &TuiDeps) -> Result<()> {
@@ -452,7 +461,7 @@ async fn search_all(api: &ApiClient, keyword: &str, prefer: Platform) -> Result<
 /// `delta`: -1 上移，+1 下移。仅在焦点为歌曲列表时生效。
 fn move_selected_song(app: &mut App, deps: &TuiDeps, delta: i32) -> Result<()> {
     if app.focus != FocusPane::Songs {
-        app.status_message = "请先 Tab 到「歌曲」列表再调序（K/J 或 Ctrl+↑/↓）".into();
+        app.status_message = "搜索结果里不能调序，Esc 返回歌单后再试（K/J 或 Ctrl+↑/↓）".into();
         return Ok(());
     }
     let Some(pl) = app.playlists.get(app.playlist_cursor) else {
