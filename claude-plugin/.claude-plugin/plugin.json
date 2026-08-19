@@ -1,6 +1,6 @@
 {
   "name": "mixly",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Mixly 音乐播放器：后台播放时在 Claude Code 底部状态栏显示歌曲、进度与歌词",
   "author": { "name": "Mixly" }
 }
